@@ -67,16 +67,21 @@ class CPSTModel(BaseModel):
         self.Dec_AB = net.Decoder()
         init_net(self.AE_AB, 'normal', 0.02, self.gpu_ids)
         init_net(self.Dec_AB, 'normal', 0.02, self.gpu_ids)
+        self.AE_AB.to(self.device)
+        self.Dec_AB.to(self.device)
 
         if self.isTrain:
             # load edge detection model
             self.detection = edgeDetection.DoobNet()
             self.detection.load_state_dict(torch.load('models/doobnet.pth.tar', map_location="cpu")['state_dict'])
+            self.detection.to(self.device)
             self.hf_BA = {}
             self.Dec_BA = net.Decoder()
             init_net(self.Dec_BA, 'normal', 0.02, self.gpu_ids)
             self.AE_BA = net.AdaIN_Encoder(vgg)
             init_net(self.AE_BA, 'normal', 0.02, self.gpu_ids)
+            self.AE_BA.to(self.device)
+            self.Dec_BA.to(self.device)
             self.D = networks.define_D(opt.output_nc, opt.ndf, opt.netD, opt.n_layers_D,
                                           opt.crop_size, opt.feature_dim, opt.max_conv_dim,
                                           opt.normD, opt.init_type, opt.init_gain, opt.no_antialias,
