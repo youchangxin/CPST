@@ -347,7 +347,7 @@ class GANLoss(nn.Module):
                 minvalue = torch.min(prediction - 1, torch.zeros(prediction.shape).to(prediction.device))
                 loss = -torch.mean(minvalue)
             else:
-                minvalue = torch.min(-prediction - 1,torch.zeros(prediction.shape).to(prediction.device))
+                minvalue = torch.min(-prediction - 1, torch.zeros(prediction.shape).to(prediction.device))
                 loss = -torch.mean(minvalue)
         return loss
 

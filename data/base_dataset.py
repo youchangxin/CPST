@@ -7,6 +7,7 @@ import numpy as np
 import torch.utils.data as data
 from PIL import Image
 import torchvision.transforms as transforms
+from torchvision.transforms import InterpolationMode
 from abc import ABC, abstractmethod
 
 
@@ -79,7 +80,7 @@ def get_params(opt, size):
     return {'crop_pos': (x, y), 'flip': flip}
 
 
-def get_transform(opt, params=None, grayscale=False, method=Image.BICUBIC, convert=True):
+def get_transform(opt, params=None, grayscale=False, method=InterpolationMode.BICUBIC, convert=True):
     transform_list = []
     if grayscale:
         transform_list.append(transforms.Grayscale(1))

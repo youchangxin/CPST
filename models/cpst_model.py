@@ -19,8 +19,8 @@ class CPSTModel(BaseModel):
         parser.add_argument('--CPST_mode', type=str, default="CPST", choices='CPST')
         parser.add_argument('--lambda_GAN_Adversarial', type=float, default=0.1, help='weight for GAN loss：GAN(G(Ic, Is))')
         parser.add_argument('--lambda_GAN_D', type=float, default=1.0, help='weight for GAN loss：GAN(G(Is, Ic))')
-        parser.add_argument('--lambda_GAN_Line', type=float, default=2.0, help='weight for Line loss')
-        parser.add_argument('--lambda_CYC', type=float, default=4.0, help='weight for l1 reconstructe loss:||Ic - G(G(Ic, Is),Ic)||')
+        parser.add_argument('--lambda_GAN_Line', type=float, default=1.0, help='weight for Line loss')
+        parser.add_argument('--lambda_CYC', type=float, default=1.0, help='weight for l1 reconstructe loss:||Ic - G(G(Ic, Is),Ic)||')
 
         opt, _ = parser.parse_known_args()
 
@@ -87,19 +87,22 @@ class CPSTModel(BaseModel):
             self.criterionLine = nn.BCELoss().to(self.device)
 
             # define optimizer
-            self.optimizer_G = torch.optim.Adam(
-                itertools.chain(self.AE_AB.parameters(), self.AE_BA.parameters(),
-                                self.Dec_BA.parameters(), self.Dec_AB.parameters()),
+            self.optimizer_G_AB = torch.optim.Adam(
+                itertools.chain(self.AE_AB.parameters(), self.Dec_AB.parameters()),
+                lr=opt.lr_G, betas=(opt.beta1, opt.beta2)
+            )
+            self.optimizer_G_BA = torch.optim.Adam(
+                itertools.chain(self.Dec_BA.parameters(), self.AE_BA.parameters()),
                 lr=opt.lr_G, betas=(opt.beta1, opt.beta2)
             )
             self.optimizer_D = torch.optim.Adam(self.D.parameters(), lr=opt.lr_D, betas=(opt.beta1, opt.beta2))
-            self.optimizers.append(self.optimizer_G)
+            self.optimizers.append(self.optimizer_G_AB)
+            self.optimizers.append(self.optimizer_G_BA)
             self.optimizers.append(self.optimizer_D)
 
     def optimize_parameters(self):
         # forward
         self.forward()
-
         # update D
         if self.opt.lambda_GAN_D:
             self.set_requires_grad([self.D], True)
@@ -112,10 +115,12 @@ class CPSTModel(BaseModel):
         # update G
         self.set_requires_grad([self.D], False)
         self.set_requires_grad([self.AE_AB, self.AE_BA, self.Dec_BA, self.Dec_AB], True)
-        self.optimizer_G.zero_grad()
+        self.optimizer_G_AB.zero_grad()
+        self.optimizer_G_BA.zero_grad()
         self.loss_G = self.compute_G_loss()
         self.loss_G.backward()
-        self.optimizer_G.step()
+        self.optimizer_G_AB.step()
+        self.optimizer_G_BA.step()
 
     def set_input(self, input):
         """Unpack input data from the dataloader and perform necessary pre-processing steps.
