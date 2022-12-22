@@ -54,21 +54,21 @@ class CPSTModel(BaseModel):
             self.loss_names += ['D']
 
         if self.isTrain:
-            self.model_names = ['AE_AB', "Dec_AB", 'Dec_BA', 'AE_BA', 'D']
+            self.model_names = ['netAE_AB', "netDec_AB", 'netDec_BA', 'netAE_BA', 'netD']
         else:  # during test time, only load G
-            self.model_names = ['AE_AB', "Dec_AB"]
+            self.model_names = ['netAE_AB', "netDec_AB"]
 
         # define networks
         vgg = net.vgg
         vgg.load_state_dict(torch.load('models/vgg_normalised.pth'))
         vgg = nn.Sequential(*list(vgg.children())[:31])
         self.hf_AB = {}
-        self.AE_AB = net.AdaIN_Encoder(vgg)
-        self.Dec_AB = net.Decoder()
-        init_net(self.AE_AB, 'normal', 0.02, self.gpu_ids)
-        init_net(self.Dec_AB, 'normal', 0.02, self.gpu_ids)
-        self.AE_AB.to(self.device)
-        self.Dec_AB.to(self.device)
+        self.netAE_AB = net.AdaIN_Encoder(vgg)
+        self.netDec_AB = net.Decoder()
+        init_net(self.netAE_AB, 'normal', 0.02, self.gpu_ids)
+        init_net(self.netDec_AB, 'normal', 0.02, self.gpu_ids)
+        self.netAE_AB.to(self.device)
+        self.netDec_AB.to(self.device)
 
         if self.isTrain:
             # load edge detection model
@@ -76,13 +76,13 @@ class CPSTModel(BaseModel):
             self.detection.load_state_dict(torch.load('models/doobnet.pth.tar', map_location="cpu")['state_dict'])
             self.detection.to(self.device)
             self.hf_BA = {}
-            self.Dec_BA = net.Decoder()
-            init_net(self.Dec_BA, 'normal', 0.02, self.gpu_ids)
-            self.AE_BA = net.AdaIN_Encoder(vgg)
-            init_net(self.AE_BA, 'normal', 0.02, self.gpu_ids)
-            self.AE_BA.to(self.device)
-            self.Dec_BA.to(self.device)
-            self.D = networks.define_D(opt.output_nc, opt.ndf, opt.netD, opt.n_layers_D,
+            self.netDec_BA = net.Decoder()
+            init_net(self.netDec_BA, 'normal', 0.02, self.gpu_ids)
+            self.netAE_BA = net.AdaIN_Encoder(vgg)
+            init_net(self.netAE_BA, 'normal', 0.02, self.gpu_ids)
+            self.netAE_BA.to(self.device)
+            self.netDec_BA.to(self.device)
+            self.netD = networks.define_D(opt.output_nc, opt.ndf, opt.netD, opt.n_layers_D,
                                           opt.crop_size, opt.feature_dim, opt.max_conv_dim,
                                           opt.normD, opt.init_type, opt.init_gain, opt.no_antialias,
                                           self.gpu_ids, opt)
@@ -93,14 +93,14 @@ class CPSTModel(BaseModel):
 
             # define optimizer
             self.optimizer_G_AB = torch.optim.Adam(
-                itertools.chain(self.AE_AB.parameters(), self.Dec_AB.parameters()),
+                itertools.chain(self.netAE_AB.parameters(), self.netDec_AB.parameters()),
                 lr=opt.lr_G, betas=(opt.beta1, opt.beta2)
             )
             self.optimizer_G_BA = torch.optim.Adam(
-                itertools.chain(self.Dec_BA.parameters(), self.AE_BA.parameters()),
+                itertools.chain(self.netDec_BA.parameters(), self.netAE_BA.parameters()),
                 lr=opt.lr_G, betas=(opt.beta1, opt.beta2)
             )
-            self.optimizer_D = torch.optim.Adam(self.D.parameters(), lr=opt.lr_D, betas=(opt.beta1, opt.beta2))
+            self.optimizer_D = torch.optim.Adam(self.netD.parameters(), lr=opt.lr_D, betas=(opt.beta1, opt.beta2))
             self.optimizers.append(self.optimizer_G_AB)
             self.optimizers.append(self.optimizer_G_BA)
             self.optimizers.append(self.optimizer_D)
@@ -110,16 +110,16 @@ class CPSTModel(BaseModel):
         self.forward()
         # update D
         if self.opt.lambda_GAN_D:
-            self.set_requires_grad([self.D], True)
-            self.set_requires_grad([self.AE_AB, self.AE_BA, self.Dec_BA, self.Dec_AB], False)
+            self.set_requires_grad([self.netD], True)
+            self.set_requires_grad([self.netAE_AB, self.netAE_BA, self.netDec_BA, self.netDec_AB], False)
             self.optimizer_D.zero_grad()
             self.loss_D = self.backward_D()
             self.loss_D.backward(retain_graph=True)
             self.optimizer_D.step()
 
         # update G
-        self.set_requires_grad([self.D], False)
-        self.set_requires_grad([self.AE_AB, self.AE_BA, self.Dec_BA, self.Dec_AB], True)
+        self.set_requires_grad([self.netD], False)
+        self.set_requires_grad([self.netAE_AB, self.netAE_BA, self.netDec_BA, self.netDec_AB], True)
         self.optimizer_G_AB.zero_grad()
         self.optimizer_G_BA.zero_grad()
         self.loss_G = self.compute_G_loss()
@@ -141,11 +141,11 @@ class CPSTModel(BaseModel):
     def forward(self):
         """Run forward pass; called by both functions <optimize_parameters> and <test>."""
 
-        self.real_A_feat = self.AE_AB(self.real_A, self.real_B, self.hf_AB)  # G_A(A)
-        self.fake_B = self.Dec_AB(self.real_A_feat, self.hf_AB)
+        self.real_A_feat = self.netAE_AB(self.real_A, self.real_B, self.hf_AB)  # G_A(A)
+        self.fake_B = self.netDec_AB(self.real_A_feat, self.hf_AB)
         if self.isTrain:
-            self.rec_A_feat = self.AE_BA(self.fake_B, self.real_A, self.hf_BA)
-            self.rec_A = self.Dec_BA(self.rec_A_feat, self.hf_BA)
+            self.rec_A_feat = self.netAE_BA(self.fake_B, self.real_A, self.hf_BA)
+            self.rec_A = self.netDec_BA(self.rec_A_feat, self.hf_BA)
 
     def backward_D_basic(self, netD, style, fake):
         """Calculate GAN loss for the discriminator
@@ -172,7 +172,7 @@ class CPSTModel(BaseModel):
     def backward_D(self):
         """Calculate GAN loss for discriminator D"""
         if self.opt.lambda_GAN_D > 0.0:
-            self.loss_D = self.backward_D_basic(self.D, self.real_B, self.fake_B) * self.opt.lambda_GAN_D
+            self.loss_D = self.backward_D_basic(self.netD, self.real_B, self.fake_B) * self.opt.lambda_GAN_D
         else:
             self.loss_D = 0
 
@@ -182,7 +182,7 @@ class CPSTModel(BaseModel):
         """Calculate GAN and loss for the generator"""
         # First, G(A) should fake the discriminator
         if self.opt.lambda_GAN_Adversarial > 0.0:
-            pred_fakeB = self.D(self.fake_B)
+            pred_fakeB = self.netD(self.fake_B)
             self.loss_adversarial = self.criterionGAN(pred_fakeB, True).mean() * self.opt.lambda_GAN_Adversarial
         else:
             self.loss_adversarial = 0.0
