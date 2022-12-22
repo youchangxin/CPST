@@ -2,7 +2,7 @@ import itertools
 import torch
 from .base_model import BaseModel
 from . import networks
-from . import net
+from . import cpst_net
 from . import edgeDetection
 import torch.nn as nn
 from torch.nn import init
