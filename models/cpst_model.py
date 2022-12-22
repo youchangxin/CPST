@@ -59,12 +59,12 @@ class CPSTModel(BaseModel):
             self.model_names = ['netAE_AB', "netDec_AB"]
 
         # define networks
-        vgg = net.vgg
+        vgg = cpst_net.vgg
         vgg.load_state_dict(torch.load('models/vgg_normalised.pth'))
         vgg = nn.Sequential(*list(vgg.children())[:31])
         self.hf_AB = {}
-        self.netAE_AB = net.AdaIN_Encoder(vgg)
-        self.netDec_AB = net.Decoder()
+        self.netAE_AB = cpst_net.AdaIN_Encoder(vgg)
+        self.netDec_AB = cpst_net.Decoder()
         init_net(self.netAE_AB, 'normal', 0.02, self.gpu_ids)
         init_net(self.netDec_AB, 'normal', 0.02, self.gpu_ids)
         self.netAE_AB.to(self.device)
@@ -76,9 +76,9 @@ class CPSTModel(BaseModel):
             self.detection.load_state_dict(torch.load('models/doobnet.pth.tar', map_location="cpu")['state_dict'])
             self.detection.to(self.device)
             self.hf_BA = {}
-            self.netDec_BA = net.Decoder()
+            self.netDec_BA = cpst_net.Decoder()
             init_net(self.netDec_BA, 'normal', 0.02, self.gpu_ids)
-            self.netAE_BA = net.AdaIN_Encoder(vgg)
+            self.netAE_BA = cpst_net.AdaIN_Encoder(vgg)
             init_net(self.netAE_BA, 'normal', 0.02, self.gpu_ids)
             self.netAE_BA.to(self.device)
             self.netDec_BA.to(self.device)
@@ -240,7 +240,7 @@ def init_weights(net, init_type='normal', init_gain=0.02):
             init.constant_(m.bias.data, 0.0)
 
     print('initialize network with %s' % init_type)
-    net.apply(init_func)  # apply the initialization function <init_func>
+    cpst_net.apply(init_func)  # apply the initialization function <init_func>
 
 
 def init_net(net, init_type='normal', init_gain=0.02, gpu_ids=[]):
@@ -254,7 +254,7 @@ def init_net(net, init_type='normal', init_gain=0.02, gpu_ids=[]):
     """
     if len(gpu_ids) > 0:
         assert (torch.cuda.is_available())
-        net.to(gpu_ids[0])
+        cpst_net.to(gpu_ids[0])
         net = torch.nn.DataParallel(net, gpu_ids)  # multi-GPUs
     init_weights(net, init_type, init_gain=init_gain)
     return net
