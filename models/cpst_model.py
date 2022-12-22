@@ -54,9 +54,9 @@ class CPSTModel(BaseModel):
             self.loss_names += ['D']
 
         if self.isTrain:
-            self.model_names = ['netAE_AB', "netDec_AB", 'netDec_BA', 'netAE_BA', 'netD']
+            self.model_names = ['AE_AB', "Dec_AB", 'Dec_BA', 'AE_BA', 'sD']
         else:  # during test time, only load G
-            self.model_names = ['netAE_AB', "netDec_AB"]
+            self.model_names = ['AE_AB', "Dec_AB"]
 
         # define networks
         vgg = net.vgg
