@@ -203,7 +203,7 @@ class DoobNet(nn.Module):
 
         edge = self.conv10(xf_concat_b)
 
-        # edge = torch.sigmoid(edge)
+        edge = torch.sigmoid(edge)
 
         return edge
 

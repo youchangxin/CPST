@@ -21,7 +21,6 @@ class CPSTModel(BaseModel):
         parser.add_argument('--lambda_GAN_D', type=float, default=1.0, help='weight for GAN loss：GAN(G(Is, Ic))')
         parser.add_argument('--lambda_GAN_Line', type=float, default=2.0, help='weight for Line loss')
         parser.add_argument('--lambda_CYC', type=float, default=4.0, help='weight for l1 reconstructe loss:||Ic - G(G(Ic, Is),Ic)||')
-        parser.add_argument('--miu_Line', type=float, default=0.5, help='balancing weight for Line loss')
 
         opt, _ = parser.parse_known_args()
 
@@ -66,8 +65,8 @@ class CPSTModel(BaseModel):
         self.hf_AB = {}
         self.netAE_AB = net.AdaIN_Encoder(vgg)
         self.netDec_AB = net.Decoder()
-        # init_net(self.netAE_AB, 'normal', 0.02, self.gpu_ids)
-        # init_net(self.netDec_AB, 'normal', 0.02, self.gpu_ids)
+        init_net(self.netAE_AB, 'normal', 0.02, self.gpu_ids)
+        init_net(self.netDec_AB, 'normal', 0.02, self.gpu_ids)
 
         if self.isTrain:
             # load edge detection model
@@ -85,7 +84,7 @@ class CPSTModel(BaseModel):
 
             self.criterionGAN = networks.GANLoss(opt.gan_mode).to(self.device)
             self.criterionCyc = torch.nn.L1Loss().to(self.device)
-            self.criterionLine = nn.BCEWithLogitsLoss().to(self.device)
+            self.criterionLine = nn.BCELoss().to(self.device)
 
             # define optimizer
             self.optimizer_G = torch.optim.Adam(
@@ -185,9 +184,7 @@ class CPSTModel(BaseModel):
             with torch.no_grad():
                 edges = self.detection(edges)
                 y, y_ = torch.chunk(edges, 2, dim=0)
-                miu = self.opt.miu_Line
-            self.loss_line = self.opt.lambda_GAN_Line * (self.criterionLine(y_, y) * miu +
-                                                         (self.criterionLine(1 - y_, 1 - y)) * (1 - miu))
+            self.loss_line = self.opt.lambda_GAN_Line * self.criterionLine(y_, y)
 
         # L1 Cycle Loss
         if self.opt.lambda_CYC > 0.0:
