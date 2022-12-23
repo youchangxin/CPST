@@ -6,7 +6,7 @@ from . import cpst_net
 from . import edgeDetection
 import torch.nn as nn
 from torch.nn import init
-
+from torchvision.transforms import RandomVerticalFlip
 
 class CPSTModel(BaseModel):
     """ This class implements CPST model.
@@ -19,7 +19,7 @@ class CPSTModel(BaseModel):
         parser.add_argument('--CPST_mode', type=str, default="CPST", choices='CPST')
         parser.add_argument('--lambda_GAN_Adversarial', type=float, default=0.1, help='weight for GAN loss：GAN(G(Ic, Is))')
         parser.add_argument('--lambda_GAN_D', type=float, default=1.0, help='weight for GAN loss：GAN(G(Is, Ic))')
-        parser.add_argument('--lambda_GAN_Line', type=float, default=1.0, help='weight for Line loss')
+        parser.add_argument('--lambda_GAN_Line', type=float, default=2.0, help='weight for Line loss')
         parser.add_argument('--lambda_CYC', type=float, default=1.0, help='weight for l1 reconstructe loss:||Ic - G(G(Ic, Is),Ic)||')
 
         opt, _ = parser.parse_known_args()
@@ -50,7 +50,7 @@ class CPSTModel(BaseModel):
             self.visual_names += ['rec_A']
             self.loss_names += ['cyc']
 
-        if self.opt.lambda_GAN_D  > 0.0 and self.isTrain:
+        if self.opt.lambda_GAN_D > 0.0 and self.isTrain:
             self.loss_names += ['D']
 
         if self.isTrain:
@@ -144,7 +144,8 @@ class CPSTModel(BaseModel):
         self.real_A_feat = self.netAE_AB(self.real_A, self.real_B, self.hf_AB)  # G_A(A)
         self.fake_B = self.netDec_AB(self.real_A_feat, self.hf_AB)
         if self.isTrain:
-            self.rec_A_feat = self.netAE_BA(self.fake_B, self.real_A, self.hf_BA)
+            aug_real_A = RandomVerticalFlip(p=1)(self.real_A)
+            self.rec_A_feat = self.netAE_BA(self.fake_B, aug_real_A, self.hf_BA)
             self.rec_A = self.netDec_BA(self.rec_A_feat, self.hf_BA)
 
     def backward_D_basic(self, netD, style, fake):
