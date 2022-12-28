@@ -208,7 +208,7 @@ class BaseModel(ABC):
                     load_dir = self.save_dir
 
                 load_path = os.path.join(load_dir, load_filename)
-                net = getattr(self, 'net' + name)
+                net = getattr(self, name)
                 if isinstance(net, torch.nn.DataParallel):
                     net = net.module
                 print('loading the model from %s' % load_path)
