@@ -132,7 +132,7 @@ def get_transform(opt, params=None, grayscale=False, method=InterpolationMode.BI
     return transforms.Compose(transform_list)
 
 
-def __make_power_2(img, base, method=Image.BICUBIC):
+def __make_power_2(img, base, method=Image.Resampling.BICUBIC):
     ow, oh = img.size
     h = int(round(oh / base) * base)
     w = int(round(ow / base) * base)
