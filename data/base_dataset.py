@@ -115,7 +115,7 @@ def get_transform(opt, params=None, grayscale=False, method=InterpolationMode.BI
         transform_list.append(transforms.Lambda(lambda img: __trim(img, opt.crop_size)))
 
     # if opt.preprocess == 'none':
-    transform_list.append(transforms.Lambda(lambda img: __make_power_2(img, base=4, method=method)))
+    transform_list.append(transforms.Lambda(lambda img: __make_power_2(img, base=4)))
 
     if not opt.no_flip:
         if params is None or 'flip' not in params:
