@@ -1,6 +1,7 @@
 import itertools
 import torch
 from .base_model import BaseModel
+from util.image_pool import ImagePool
 from . import networks
 from . import cpst_net
 from . import edgeDetection
@@ -75,6 +76,7 @@ class CPSTModel(BaseModel):
             self.detection = edgeDetection.DoobNet()
             self.detection.load_state_dict(torch.load('models/doobnet.pth.tar', map_location="cpu")['state_dict'])
             self.detection.to(self.device)
+            self.fake_pool = ImagePool(opt.pool_size)
             self.hf_BA = {}
             self.netDec_BA = cpst_net.Decoder()
             init_net(self.netDec_BA, 'normal', 0.02, self.gpu_ids)
@@ -173,7 +175,8 @@ class CPSTModel(BaseModel):
     def backward_D(self):
         """Calculate GAN loss for discriminator D"""
         if self.opt.lambda_GAN_D > 0.0:
-            self.loss_D = self.backward_D_basic(self.netD, self.real_B, self.fake_B) * self.opt.lambda_GAN_D
+            fake_B = self.fake_pool.query(self.fake_B)
+            self.loss_D = self.backward_D_basic(self.netD, self.real_B, fake_B) * self.opt.lambda_GAN_D
         else:
             self.loss_D = 0
 
