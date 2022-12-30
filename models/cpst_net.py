@@ -241,15 +241,18 @@ class Decoder(nn.Module):
     def forward(self, adain_feat, skips):
         out = self.dec1(adain_feat)
 
-        hf = torch.cat(skips["pool3"], dim=1)
+        #hf = torch.cat(skips["pool3"], dim=1)
+        hf = torch.sum(torch.stack(skips["pool3"]), dim=0)
         out = torch.add(out, self.att1(hf))
         out = self.dec2(out)
 
-        hf = torch.cat(skips["pool2"], dim=1)
+        #hf = torch.cat(skips["pool2"], dim=1)
+        hf = torch.sum(torch.stack(skips["pool2"]), dim=0)
         out = torch.add(out, self.att2(hf))
         out = self.dec3(out)
 
-        hf = torch.cat(skips["pool1"], dim=1)
+        #hf = torch.cat(skips["pool1"], dim=1)
+        hf = torch.sum(torch.stack(skips["pool1"]), dim=0)
         out = torch.add(out, self.att3(hf))
         out = self.dec4(out)
 
@@ -259,28 +262,31 @@ class Decoder(nn.Module):
 class Attention(nn.Module):
     def __init__(self, channel, reduction=4):
         super(Attention, self).__init__()
-        in_channel = channel * 3
-        self.conv1 = nn.Conv2d(in_channel, channel, kernel_size=3, padding=1)
+        self.pad = nn.ReflectionPad2d((1, 1, 1, 1))
+        self.conv1 = nn.Conv2d(channel, channel, kernel_size=3)
         self.in1 = nn.InstanceNorm2d(channel)
         self.relu = nn.ReLU()
-        self.conv2 = nn.Conv2d(channel, channel, kernel_size=3, padding=1)
-        self.in2 = nn.InstanceNorm2d(channel)
+        #self.conv2 = nn.Conv2d(channel, channel, kernel_size=3, padding=1)
+        #self.in2 = nn.InstanceNorm2d(channel)
 
         self.avg_pool = nn.AdaptiveAvgPool2d(1)
         self.squeeze = nn.Sequential(
-            nn.Conv2d(channel, channel // reduction, kernel_size=3, padding=1),
+            nn.ReflectionPad2d((1, 1, 1, 1)),
+            nn.Conv2d(channel, channel // reduction, kernel_size=3),
             nn.ReLU(inplace=True),
-            nn.Conv2d(channel // reduction, channel, kernel_size=3, padding=1),
+            nn.ReflectionPad2d((1, 1, 1, 1)),
+            nn.Conv2d(channel // reduction, channel, kernel_size=3),
             nn.Sigmoid()
         )
 
     def forward(self, input):
-        x = self.conv1(input)
+        x = self.pad(input)
+        x = self.conv1(x)
         x = self.in1(x)
         x = self.relu(x)
 
-        x = self.conv2(x)
-        x = self.in2(x)
+        #x = self.conv2(x)
+        #x = self.in2(x)
         residual = x
         b, c, _, _ = residual.size()
 
