@@ -9,6 +9,7 @@ import torch.nn as nn
 from torch.nn import init
 from torchvision.transforms import RandomVerticalFlip
 
+
 class CPSTModel(BaseModel):
     """ This class implements CPST model.
     This code is inspired by DCLGAN
@@ -18,10 +19,10 @@ class CPSTModel(BaseModel):
     def modify_commandline_options(parser, is_train=True):
         """  Configures options specific for CPST """
         parser.add_argument('--CPST_mode', type=str, default="CPST", choices='CPST')
-        parser.add_argument('--lambda_GAN_Adversarial', type=float, default=0.1, help='weight for GAN loss：GAN(G(Ic, Is))')
+        parser.add_argument('--lambda_GAN_Adversarial', type=float, default=1.0, help='weight for GAN loss：GAN(G(Ic, Is))')
         parser.add_argument('--lambda_GAN_D', type=float, default=1.0, help='weight for GAN loss：GAN(G(Is, Ic))')
         parser.add_argument('--lambda_GAN_Line', type=float, default=2.0, help='weight for Line loss')
-        parser.add_argument('--lambda_CYC', type=float, default=1.0, help='weight for l1 reconstructe loss:||Ic - G(G(Ic, Is),Ic)||')
+        parser.add_argument('--lambda_CYC', type=float, default=0.5, help='weight for l1 reconstructe loss:||Ic - G(G(Ic, Is),Ic)||')
 
         opt, _ = parser.parse_known_args()
 
