@@ -56,21 +56,21 @@ class CPSTModel(BaseModel):
             self.loss_names += ['D']
 
         if self.isTrain:
-            self.model_names = ['netAE_AB', "netDec_AB", 'netDec_BA', 'netAE_BA', 'netD']
+            self.model_names = ['netAE', "netDec", 'netD']
         else:  # during test time, only load G
-            self.model_names = ['netAE_AB', "netDec_AB"]
+            self.model_names = ['netAE', "netDec"]
 
         # define networks
         vgg = cpst_net.vgg
         vgg.load_state_dict(torch.load('models/vgg_normalised.pth'))
         vgg = nn.Sequential(*list(vgg.children())[:31])
         self.hf_AB = {}
-        self.netAE_AB = cpst_net.AdaIN_Encoder(vgg)
-        self.netDec_AB = cpst_net.Decoder()
-        init_net(self.netAE_AB, 'normal', 0.02, self.gpu_ids)
-        init_net(self.netDec_AB, 'normal', 0.02, self.gpu_ids)
-        self.netAE_AB.to(self.device)
-        self.netDec_AB.to(self.device)
+        self.netAE = cpst_net.AdaIN_Encoder(vgg)
+        self.netDec = cpst_net.Decoder()
+        init_net(self.netAE, 'normal', 0.02, self.gpu_ids)
+        init_net(self.netDec, 'normal', 0.02, self.gpu_ids)
+        self.netAE.to(self.device)
+        self.netDec.to(self.device)
 
         if self.isTrain:
             # load edge detection model
@@ -79,12 +79,6 @@ class CPSTModel(BaseModel):
             self.detection.to(self.device)
             self.fake_pool = ImagePool(opt.pool_size)
             self.hf_BA = {}
-            self.netDec_BA = cpst_net.Decoder()
-            init_net(self.netDec_BA, 'normal', 0.02, self.gpu_ids)
-            self.netAE_BA = cpst_net.AdaIN_Encoder(vgg)
-            init_net(self.netAE_BA, 'normal', 0.02, self.gpu_ids)
-            self.netAE_BA.to(self.device)
-            self.netDec_BA.to(self.device)
             self.netD = networks.define_D(opt.output_nc, opt.ndf, opt.netD, opt.n_layers_D,
                                           opt.crop_size, opt.feature_dim, opt.max_conv_dim,
                                           opt.normD, opt.init_type, opt.init_gain, opt.no_antialias,
@@ -95,17 +89,12 @@ class CPSTModel(BaseModel):
             self.criterionLine = nn.BCELoss().to(self.device)
 
             # define optimizer
-            self.optimizer_G_AB = torch.optim.Adam(
-                itertools.chain(self.netAE_AB.parameters(), self.netDec_AB.parameters()),
-                lr=opt.lr_G, betas=(opt.beta1, opt.beta2)
-            )
-            self.optimizer_G_BA = torch.optim.Adam(
-                itertools.chain(self.netDec_BA.parameters(), self.netAE_BA.parameters()),
+            self.optimizer_G = torch.optim.Adam(
+                itertools.chain(self.netAE.parameters(), self.netDec.parameters()),
                 lr=opt.lr_G, betas=(opt.beta1, opt.beta2)
             )
             self.optimizer_D = torch.optim.Adam(self.netD.parameters(), lr=opt.lr_D, betas=(opt.beta1, opt.beta2))
-            self.optimizers.append(self.optimizer_G_AB)
-            self.optimizers.append(self.optimizer_G_BA)
+            self.optimizers.append(self.optimizer_G)
             self.optimizers.append(self.optimizer_D)
 
     def optimize_parameters(self):
@@ -114,7 +103,7 @@ class CPSTModel(BaseModel):
         # update D
         if self.opt.lambda_GAN_D:
             self.set_requires_grad([self.netD], True)
-            self.set_requires_grad([self.netAE_AB, self.netAE_BA, self.netDec_BA, self.netDec_AB], False)
+            self.set_requires_grad([self.netAE, self.netDec], False)
             self.optimizer_D.zero_grad()
             self.loss_D = self.backward_D()
             self.loss_D.backward(retain_graph=True)
@@ -122,13 +111,11 @@ class CPSTModel(BaseModel):
 
         # update G
         self.set_requires_grad([self.netD], False)
-        self.set_requires_grad([self.netAE_AB, self.netAE_BA, self.netDec_BA, self.netDec_AB], True)
-        self.optimizer_G_AB.zero_grad()
-        self.optimizer_G_BA.zero_grad()
+        self.set_requires_grad([self.netAE, self.netDec], True)
+        self.optimizer_G.zero_grad()
         self.loss_G = self.compute_G_loss()
         self.loss_G.backward()
-        self.optimizer_G_AB.step()
-        self.optimizer_G_BA.step()
+        self.optimizer_G.step()
 
     def set_input(self, input):
         """Unpack input data from the dataloader and perform necessary pre-processing steps.
@@ -144,12 +131,12 @@ class CPSTModel(BaseModel):
     def forward(self):
         """Run forward pass; called by both functions <optimize_parameters> and <test>."""
 
-        self.real_A_feat = self.netAE_AB(self.real_A, self.real_B, self.hf_AB)  # G_A(A)
-        self.fake_B = self.netDec_AB(self.real_A_feat, self.hf_AB)
+        self.real_A_feat = self.netAE(self.real_A, self.real_B, self.hf_AB)  # G_A(A)
+        self.fake_B = self.netDec(self.real_A_feat, self.hf_AB)
         if self.isTrain:
             aug_real_A = RandomVerticalFlip(p=1)(self.real_A)
-            self.rec_A_feat = self.netAE_BA(self.fake_B, aug_real_A, self.hf_BA)
-            self.rec_A = self.netDec_BA(self.rec_A_feat, self.hf_BA)
+            self.rec_A_feat = self.netAE(self.fake_B, aug_real_A, self.hf_BA)
+            self.rec_A = self.netDec(self.rec_A_feat, self.hf_BA)
 
     def backward_D_basic(self, netD, style, fake):
         """Calculate GAN loss for the discriminator
