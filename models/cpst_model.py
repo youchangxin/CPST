@@ -187,6 +187,8 @@ class CPSTModel(BaseModel):
                 edges = self.detection(edges)
                 y, y_ = torch.chunk(edges, 2, dim=0)
             self.loss_line = self.opt.lambda_GAN_Line * self.criterionLine(y_, y)
+        else:
+            self.loss_line = 0.0
 
         # L1 Cycle Loss
         if self.opt.lambda_CYC > 0.0:

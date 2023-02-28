@@ -234,9 +234,9 @@ class Decoder(nn.Module):
         self.dec3 = nn.Sequential(*decoder[16:26])
         self.dec4 = nn.Sequential(*decoder[26:])
 
-        self.att1 = Attention(256)
-        self.att2 = Attention(128)
-        self.att3 = Attention(64)
+        self.att1 = WaveletAttention(256)
+        self.att2 = WaveletAttention(128)
+        self.att3 = WaveletAttention(64)
 
     def forward(self, adain_feat, skips):
         out = self.dec1(adain_feat)
@@ -276,8 +276,8 @@ class Attention(nn.Module):
             nn.ReLU(inplace=True),
             nn.ReflectionPad2d((1, 1, 1, 1)),
             nn.Conv2d(channel // reduction, channel, kernel_size=3),
-            nn.Sigmoid()
         )
+        self.sf = nn.Softmax(dim=1)
 
     def forward(self, input):
         x = self.pad(input)
@@ -293,4 +293,35 @@ class Attention(nn.Module):
         # channel attention
         y = self.squeeze(x)
         y = self.avg_pool(y).view(b, c, 1, 1)
-        return residual + x * y.expand_as(x)
+        A = self.sf(y)
+        return residual + x * A
+
+
+class WaveletAttention(nn.Module):
+    def __init__(self, in_planes):
+        super(WaveletAttention, self).__init__()
+        self.q = nn.Conv2d(in_planes, in_planes, (1, 1))
+        self.k = nn.Conv2d(in_planes, in_planes, (1, 1))
+        self.v = nn.Conv2d(in_planes, in_planes, (1, 1))
+        self.sm = nn.Softmax(dim=-1)
+        self.out_conv = nn.Conv2d(in_planes, in_planes, (1, 1))
+
+    def forward(self, input):
+        Q = self.q(input)
+        K = self.k(input)
+        V = self.v(input)
+
+        b, c, h, w = Q.size()
+        Q = Q.view(b, -1, w * h).permute(0, 2, 1)
+        K = K.view(b, -1, w * h)
+        S = torch.bmm(Q, K)
+        S = self.sm(S)
+
+        V = V.view(b, -1, w * h)
+        O = torch.bmm(V, S.permute(0, 2, 1))
+        O = O.view(b, c, h, w)
+        O = self.out_conv(O)
+        #output += V
+        return O
+
+
