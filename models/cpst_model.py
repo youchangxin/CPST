@@ -19,10 +19,11 @@ class CPSTModel(BaseModel):
     def modify_commandline_options(parser, is_train=True):
         """  Configures options specific for CPST """
         parser.add_argument('--CPST_mode', type=str, default="CPST", choices='CPST')
+        parser.add_argument('--disable_wavelet', action="store_true", help="to disable the Wavelet transform module")
         parser.add_argument('--lambda_GAN_Adversarial', type=float, default=1.0, help='weight for GAN loss：GAN(G(Ic, Is))')
         parser.add_argument('--lambda_GAN_D', type=float, default=1.0, help='weight for GAN loss：GAN(G(Is, Ic))')
         parser.add_argument('--lambda_GAN_Line', type=float, default=2.0, help='weight for Line loss')
-        parser.add_argument('--lambda_CYC', type=float, default=0.5, help='weight for l1 reconstructe loss:||Ic - G(G(Ic, Is),Ic)||')
+        parser.add_argument('--lambda_CYC', type=float, default=1.0, help='weight for l1 reconstructe loss:||Ic - G(G(Ic, Is),Ic)||')
 
         opt, _ = parser.parse_known_args()
 
@@ -61,12 +62,9 @@ class CPSTModel(BaseModel):
             self.model_names = ['netAE', "netDec"]
 
         # define networks
-        vgg = cpst_net.vgg
-        vgg.load_state_dict(torch.load('models/vgg_normalised.pth'))
-        vgg = nn.Sequential(*list(vgg.children())[:31])
         self.hf_AB = {}
-        self.netAE = cpst_net.AdaIN_Encoder(vgg)
-        self.netDec = cpst_net.Decoder()
+        self.netAE = cpst_net.Encoder(opt.disable_wavelet)
+        self.netDec = cpst_net.Decoder(opt.disable_wavelet)
         init_net(self.netAE, 'normal', 0.02, self.gpu_ids)
         init_net(self.netDec, 'normal', 0.02, self.gpu_ids)
         self.netAE.to(self.device)
@@ -130,7 +128,6 @@ class CPSTModel(BaseModel):
 
     def forward(self):
         """Run forward pass; called by both functions <optimize_parameters> and <test>."""
-
         self.real_A_feat = self.netAE(self.real_A, self.real_B, self.hf_AB)  # G_A(A)
         self.fake_B = self.netDec(self.real_A_feat, self.hf_AB)
         if self.isTrain:

@@ -2,66 +2,6 @@ import torch
 import torch.nn as nn
 import numpy as np
 
-vgg = nn.Sequential(
-    nn.Conv2d(3, 3, (1, 1)),
-    nn.ReflectionPad2d((1, 1, 1, 1)),
-    nn.Conv2d(3, 64, (3, 3)),
-    nn.ReLU(),  # relu1-1
-    nn.ReflectionPad2d((1, 1, 1, 1)),
-    nn.Conv2d(64, 64, (3, 3)),
-    nn.ReLU(),  # relu1-2
-    nn.MaxPool2d((2, 2), (2, 2), (0, 0), ceil_mode=True),
-
-    nn.ReflectionPad2d((1, 1, 1, 1)),
-    nn.Conv2d(64, 128, (3, 3)),
-    nn.ReLU(),  # relu2-1
-    nn.ReflectionPad2d((1, 1, 1, 1)),
-    nn.Conv2d(128, 128, (3, 3)),
-    nn.ReLU(),  # relu2-2
-    nn.MaxPool2d((2, 2), (2, 2), (0, 0), ceil_mode=True),
-
-    nn.ReflectionPad2d((1, 1, 1, 1)),
-    nn.Conv2d(128, 256, (3, 3)),
-    nn.ReLU(),  # relu3-1
-    nn.ReflectionPad2d((1, 1, 1, 1)),
-    nn.Conv2d(256, 256, (3, 3)),
-    nn.ReLU(),  # relu3-2
-    nn.ReflectionPad2d((1, 1, 1, 1)),
-    nn.Conv2d(256, 256, (3, 3)),
-    nn.ReLU(),  # relu3-3
-    nn.ReflectionPad2d((1, 1, 1, 1)),
-    nn.Conv2d(256, 256, (3, 3)),
-    nn.ReLU(),  # relu3-4
-    nn.MaxPool2d((2, 2), (2, 2), (0, 0), ceil_mode=True),
-
-    nn.ReflectionPad2d((1, 1, 1, 1)),
-    nn.Conv2d(256, 512, (3, 3)),
-    nn.ReLU(),  # relu4-1, this is the last layer used
-    nn.ReflectionPad2d((1, 1, 1, 1)),
-    nn.Conv2d(512, 512, (3, 3)),
-    nn.ReLU(),  # relu4-2
-    nn.ReflectionPad2d((1, 1, 1, 1)),
-    nn.Conv2d(512, 512, (3, 3)),
-    nn.ReLU(),  # relu4-3
-    nn.ReflectionPad2d((1, 1, 1, 1)),
-    nn.Conv2d(512, 512, (3, 3)),
-    nn.ReLU(),  # relu4-4
-    nn.MaxPool2d((2, 2), (2, 2), (0, 0), ceil_mode=True),
-
-    nn.ReflectionPad2d((1, 1, 1, 1)),
-    nn.Conv2d(512, 512, (3, 3)),
-    nn.ReLU(),  # relu5-1
-    nn.ReflectionPad2d((1, 1, 1, 1)),
-    nn.Conv2d(512, 512, (3, 3)),
-    nn.ReLU(),  # relu5-2
-    nn.ReflectionPad2d((1, 1, 1, 1)),
-    nn.Conv2d(512, 512, (3, 3)),
-    nn.ReLU(),  # relu5-3
-    nn.ReflectionPad2d((1, 1, 1, 1)),
-    nn.Conv2d(512, 512, (3, 3)),
-    nn.ReLU()  # relu5-4
-)
-
 
 def get_wav(in_channels):
     """wavelet decomposition using conv2d"""
@@ -113,18 +53,24 @@ class WavePool(nn.Module):
 
 
 class ContentEncoder(nn.Module):
-    def __init__(self, encoder):
+    def __init__(self, encoder, disable_wavelet):
         super(ContentEncoder, self).__init__()
-        enc_layers = list(encoder.children())
-        self.enc1 = nn.Sequential(*enc_layers[:7])
+        self.disable_wavelet = disable_wavelet
+
+        self.vgg = nn.Sequential(*encoder[:31])
+
+        self.enc1 = nn.Sequential(*encoder[:7])
         self.pool1 = WavePool(64)
-        self.enc2 = nn.Sequential(*enc_layers[8:14])
+        self.enc2 = nn.Sequential(*encoder[8:14])
         self.pool2 = WavePool(128)
-        self.enc3 = nn.Sequential(*enc_layers[15:27])
+        self.enc3 = nn.Sequential(*encoder[15:27])
         self.pool3 = WavePool(256)
-        self.enc4 = nn.Sequential(*enc_layers[28:31])
+        self.enc4 = nn.Sequential(*encoder[28:31])
 
     def forward(self, input, skips):
+        if self.disable_wavelet:
+            return self.vgg(input)
+
         out = self.enc1(input)
         LL, LH, HL, HH = self.pool1(out)
         skips['pool1'] = [LH, HL, HH]
@@ -144,19 +90,81 @@ class ContentEncoder(nn.Module):
 class StyleEncoder(nn.Module):
     def __init__(self, encoder):
         super(StyleEncoder, self).__init__()
-        enc_layers = list(encoder.children())
-        self.vggEnc = nn.Sequential(*enc_layers[:31])  # input -> relu4_1 512
+        self.styleEnc = nn.Sequential(*encoder[:31])  # input -> relu4_1 512
 
     def forward(self, input):
-        results = self.vggEnc(input)
+        results = self.styleEnc(input)
         return results
 
 
-class AdaIN_Encoder(nn.Module):
-    def __init__(self, encoder):
-        super(AdaIN_Encoder, self).__init__()
-        self.conEnc = ContentEncoder(encoder)
-        self.styEnc = StyleEncoder(encoder)
+class Encoder(nn.Module):
+    def __init__(self, disable_wavelet):
+        super(Encoder, self).__init__()
+
+        self.conEnc = ContentEncoder(self.backbone(disable_wavelet), disable_wavelet)
+        self.styEnc = StyleEncoder(self.backbone())
+
+    def backbone(self, disable_wavelet=True):
+        backbone = [
+            nn.Conv2d(3, 3, (1, 1)),
+            nn.ReflectionPad2d((1, 1, 1, 1)),
+            nn.Conv2d(3, 64, (3, 3)),
+            nn.ReLU(),  # relu1-1
+            nn.ReflectionPad2d((1, 1, 1, 1)),
+            nn.Conv2d(64, 64, (3, 3)),
+            nn.ReLU(),  # relu1-2
+            nn.MaxPool2d((2, 2), (2, 2), (0, 0), ceil_mode=True) if disable_wavelet else WavePool(64),
+
+            nn.ReflectionPad2d((1, 1, 1, 1)),
+            nn.Conv2d(64, 128, (3, 3)),
+            nn.ReLU(),  # relu2-1
+            nn.ReflectionPad2d((1, 1, 1, 1)),
+            nn.Conv2d(128, 128, (3, 3)),
+            nn.ReLU(),  # relu2-2
+            nn.MaxPool2d((2, 2), (2, 2), (0, 0), ceil_mode=True) if disable_wavelet else WavePool(128),
+
+            nn.ReflectionPad2d((1, 1, 1, 1)),
+            nn.Conv2d(128, 256, (3, 3)),
+            nn.ReLU(),  # relu3-1
+            nn.ReflectionPad2d((1, 1, 1, 1)),
+            nn.Conv2d(256, 256, (3, 3)),
+            nn.ReLU(),  # relu3-2
+            nn.ReflectionPad2d((1, 1, 1, 1)),
+            nn.Conv2d(256, 256, (3, 3)),
+            nn.ReLU(),  # relu3-3
+            nn.ReflectionPad2d((1, 1, 1, 1)),
+            nn.Conv2d(256, 256, (3, 3)),
+            nn.ReLU(),  # relu3-4
+            nn.MaxPool2d((2, 2), (2, 2), (0, 0), ceil_mode=True) if disable_wavelet else WavePool(256),
+
+            nn.ReflectionPad2d((1, 1, 1, 1)),
+            nn.Conv2d(256, 512, (3, 3)),
+            nn.ReLU(),  # relu4-1, this is the last layer used
+            nn.ReflectionPad2d((1, 1, 1, 1)),
+            nn.Conv2d(512, 512, (3, 3)),
+            nn.ReLU(),  # relu4-2
+            nn.ReflectionPad2d((1, 1, 1, 1)),
+            nn.Conv2d(512, 512, (3, 3)),
+            nn.ReLU(),  # relu4-3
+            nn.ReflectionPad2d((1, 1, 1, 1)),
+            nn.Conv2d(512, 512, (3, 3)),
+            nn.ReLU(),  # relu4-4
+            nn.MaxPool2d((2, 2), (2, 2), (0, 0), ceil_mode=True) if disable_wavelet else WavePool(512),
+
+            nn.ReflectionPad2d((1, 1, 1, 1)),
+            nn.Conv2d(512, 512, (3, 3)),
+            nn.ReLU(),  # relu5-1
+            nn.ReflectionPad2d((1, 1, 1, 1)),
+            nn.Conv2d(512, 512, (3, 3)),
+            nn.ReLU(),  # relu5-2
+            nn.ReflectionPad2d((1, 1, 1, 1)),
+            nn.Conv2d(512, 512, (3, 3)),
+            nn.ReLU(),  # relu5-3
+            nn.ReflectionPad2d((1, 1, 1, 1)),
+            nn.Conv2d(512, 512, (3, 3)),
+            nn.ReLU()  # relu5-4
+        ]
+        return backbone
 
     def calc_mean_std(self, feat, eps=1e-5):
         # eps is a small value added to the variance to avoid divide-by-zero.
@@ -189,8 +197,9 @@ class AdaIN_Encoder(nn.Module):
 
 
 class Decoder(nn.Module):
-    def __init__(self):
+    def __init__(self, disable_wavelet):
         super(Decoder, self).__init__()
+        self.disable_wavelet = disable_wavelet
         decoder = [
             nn.ReflectionPad2d((1, 1, 1, 1)),
             nn.Conv2d(512, 256, (3, 3)),
@@ -229,16 +238,20 @@ class Decoder(nn.Module):
             nn.ReflectionPad2d((1, 1, 1, 1)),
             nn.Conv2d(64, 3, (3, 3))
         ]
+        if self.disable_wavelet:
+            self.whole_decoder = nn.Sequential(*decoder)
         self.dec1 = nn.Sequential(*decoder[:3])
         self.dec2 = nn.Sequential(*decoder[3:16])
         self.dec3 = nn.Sequential(*decoder[16:26])
         self.dec4 = nn.Sequential(*decoder[26:])
 
-        self.att1 = WaveletAttention(256)
-        self.att2 = WaveletAttention(128)
-        self.att3 = WaveletAttention(64)
+        self.att1 = Attention(256)
+        self.att2 = Attention(128)
+        self.att3 = Attention(64)
 
     def forward(self, adain_feat, skips):
+        if self.disable_wavelet:
+            return self.whole_decoder(adain_feat)
         out = self.dec1(adain_feat)
 
         #hf = torch.cat(skips["pool3"], dim=1)
