@@ -245,9 +245,9 @@ class Decoder(nn.Module):
         self.dec3 = nn.Sequential(*decoder[16:26])
         self.dec4 = nn.Sequential(*decoder[26:])
 
-        self.att1 = Attention(256)
-        self.att2 = Attention(128)
-        self.att3 = Attention(64)
+        self.att1 = WaveletAttention(256)
+        self.att2 = WaveletAttention(128)
+        self.att3 = WaveletAttention(64)
 
     def forward(self, adain_feat, skips):
         if self.disable_wavelet:
@@ -334,7 +334,7 @@ class WaveletAttention(nn.Module):
         O = torch.bmm(V, S.permute(0, 2, 1))
         O = O.view(b, c, h, w)
         O = self.out_conv(O)
-        #output += V
+        O += input
         return O
 
 
