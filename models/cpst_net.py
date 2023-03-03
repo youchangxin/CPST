@@ -245,9 +245,9 @@ class Decoder(nn.Module):
         self.dec3 = nn.Sequential(*decoder[16:26])
         self.dec4 = nn.Sequential(*decoder[26:])
 
-        self.att1 = WaveletAttention(256)
-        self.att2 = WaveletAttention(128)
-        self.att3 = WaveletAttention(64)
+        self.att1 = Attention(256)
+        self.att2 = Attention(128)
+        self.att3 = Attention(64)
 
     def forward(self, adain_feat, skips):
         if self.disable_wavelet:
@@ -273,39 +273,23 @@ class Decoder(nn.Module):
 
 
 class Attention(nn.Module):
-    def __init__(self, channel, reduction=4):
+    def __init__(self, in_planes):
         super(Attention, self).__init__()
-        self.pad = nn.ReflectionPad2d((1, 1, 1, 1))
-        self.conv1 = nn.Conv2d(channel, channel, kernel_size=3)
-        self.in1 = nn.InstanceNorm2d(channel)
+        self.conv1 = nn.Conv2d(in_planes, in_planes, (1, 1))
+        self.in1 = nn.InstanceNorm2d(in_planes)
         self.relu = nn.ReLU()
-        #self.conv2 = nn.Conv2d(channel, channel, kernel_size=3, padding=1)
-        #self.in2 = nn.InstanceNorm2d(channel)
-
         self.avg_pool = nn.AdaptiveAvgPool2d(1)
-        self.squeeze = nn.Sequential(
-            nn.ReflectionPad2d((1, 1, 1, 1)),
-            nn.Conv2d(channel, channel // reduction, kernel_size=3),
-            nn.ReLU(inplace=True),
-            nn.ReflectionPad2d((1, 1, 1, 1)),
-            nn.Conv2d(channel // reduction, channel, kernel_size=3),
-        )
         self.sf = nn.Softmax(dim=1)
 
     def forward(self, input):
-        x = self.pad(input)
-        x = self.conv1(x)
+        x = self.conv1(input)
         x = self.in1(x)
         x = self.relu(x)
 
-        #x = self.conv2(x)
-        #x = self.in2(x)
         residual = x
         b, c, _, _ = residual.size()
-
         # channel attention
-        y = self.squeeze(x)
-        y = self.avg_pool(y).view(b, c, 1, 1)
+        y = self.avg_pool(x).view(b, c, 1, 1)
         A = self.sf(y)
         return residual + x * A
 
