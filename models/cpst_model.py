@@ -8,6 +8,7 @@ from . import edgeDetection
 import torch.nn as nn
 from torch.nn import init
 from torchvision.transforms import RandomVerticalFlip
+from .networks import calc_mean_std, mean_variance_norm
 
 
 class CPSTModel(BaseModel):
@@ -20,10 +21,18 @@ class CPSTModel(BaseModel):
         """  Configures options specific for CPST """
         parser.add_argument('--CPST_mode', type=str, default="CPST", choices='CPST')
         parser.add_argument('--disable_wavelet', action="store_true", help="to disable the Wavelet transform module")
-        parser.add_argument('--lambda_GAN_Adversarial', type=float, default=1.0, help='weight for GAN loss：GAN(G(Ic, Is))')
-        parser.add_argument('--lambda_GAN_D', type=float, default=1.0, help='weight for GAN loss：GAN(G(Is, Ic))')
-        parser.add_argument('--lambda_GAN_Line', type=float, default=2.0, help='weight for Line loss')
-        parser.add_argument('--lambda_CYC', type=float, default=1.0, help='weight for l1 reconstructe loss:||Ic - G(G(Ic, Is),Ic)||')
+        parser.add_argument('--shallow_layer', action="store_true",
+                            help="if specified, also use features of shallow layers")
+        parser.add_argument('--skip_connection_3', action='store_true',
+                            help='if specified, add skip connection on ReLU-3')
+        parser.add_argument('--lambda_GAN_Adversarial', type=float, default=1.5,
+                            help='weight for GAN loss：GAN(G(Ic, Is))')
+        parser.add_argument('--lambda_GAN_D', type=float, default=0.2, help='weight for GAN loss：GAN(G(Is, Ic))')
+        parser.add_argument('--lambda_style', type=float, default=1.0, help='weight for global style loss')
+        parser.add_argument('--lambda_content', type=float, default=1.0, help='weight for global content loss')
+        parser.add_argument('--lambda_GAN_Line', type=float, default=1.0, help='weight for Line loss')
+        parser.add_argument('--lambda_CYC', type=float, default=1.0,
+                            help='weight for l1 reconstructe loss:||Ic - G(G(Ic, Is),Ic)||')
 
         opt, _ = parser.parse_known_args()
 
@@ -53,21 +62,28 @@ class CPSTModel(BaseModel):
             self.visual_names += ['rec_A']
             self.loss_names += ['cyc']
 
+        if self.opt.lambda_style > 0.0 and self.isTrain:
+            self.loss_names += ['style']
+
+            if self.opt.lambda_content > 0.0 and self.isTrain:
+                self.loss_names += ['content']
+
         if self.opt.lambda_GAN_D > 0.0 and self.isTrain:
             self.loss_names += ['D']
 
         if self.isTrain:
-            self.model_names = ['netAE', "netDec", 'netD']
+            self.model_names = ["netTransformer", "netDec", 'netD']
         else:  # during test time, only load G
-            self.model_names = ['netAE', "netDec"]
+            self.model_names = ['netTransformer', "netDec"]
 
         # define networks
-        self.hf_AB = {}
         self.netAE = cpst_net.Encoder(opt.disable_wavelet)
-        self.netDec = cpst_net.Decoder(opt.disable_wavelet)
-        init_net(self.netAE, 'normal', 0.02, self.gpu_ids)
+        self.netTransformer = cpst_net.Transformer(disable_wavelet=opt.disable_wavelet, shallow_layer=opt.shallow_layer)
+        self.netDec = cpst_net.Decoder(skip_connection_3=opt.skip_connection_3)
+        init_net(self.netTransformer, 'normal', 0.02, self.gpu_ids)
         init_net(self.netDec, 'normal', 0.02, self.gpu_ids)
         self.netAE.to(self.device)
+        self.netTransformer.to(self.device)
         self.netDec.to(self.device)
 
         if self.isTrain:
@@ -76,7 +92,6 @@ class CPSTModel(BaseModel):
             self.detection.load_state_dict(torch.load('models/doobnet.pth.tar', map_location="cpu")['state_dict'])
             self.detection.to(self.device)
             self.fake_pool = ImagePool(opt.pool_size)
-            self.hf_BA = {}
             self.netD = networks.define_D(opt.output_nc, opt.ndf, opt.netD, opt.n_layers_D,
                                           opt.crop_size, opt.feature_dim, opt.max_conv_dim,
                                           opt.normD, opt.init_type, opt.init_gain, opt.no_antialias,
@@ -85,10 +100,11 @@ class CPSTModel(BaseModel):
             self.criterionGAN = networks.GANLoss(opt.gan_mode).to(self.device)
             self.criterionCyc = torch.nn.L1Loss().to(self.device)
             self.criterionLine = nn.BCELoss().to(self.device)
+            self.criterionMSE = torch.nn.MSELoss().to(self.device)
 
             # define optimizer
             self.optimizer_G = torch.optim.Adam(
-                itertools.chain(self.netAE.parameters(), self.netDec.parameters()),
+                itertools.chain(self.netTransformer.parameters(), self.netDec.parameters()),
                 lr=opt.lr_G, betas=(opt.beta1, opt.beta2)
             )
             self.optimizer_D = torch.optim.Adam(self.netD.parameters(), lr=opt.lr_D, betas=(opt.beta1, opt.beta2))
@@ -101,7 +117,7 @@ class CPSTModel(BaseModel):
         # update D
         if self.opt.lambda_GAN_D:
             self.set_requires_grad([self.netD], True)
-            self.set_requires_grad([self.netAE, self.netDec], False)
+            self.set_requires_grad([self.netTransformer, self.netDec], False)
             self.optimizer_D.zero_grad()
             self.loss_D = self.backward_D()
             self.loss_D.backward(retain_graph=True)
@@ -109,7 +125,7 @@ class CPSTModel(BaseModel):
 
         # update G
         self.set_requires_grad([self.netD], False)
-        self.set_requires_grad([self.netAE, self.netDec], True)
+        self.set_requires_grad([self.netTransformer, self.netDec], True)
         self.optimizer_G.zero_grad()
         self.loss_G = self.compute_G_loss()
         self.loss_G.backward()
@@ -128,12 +144,15 @@ class CPSTModel(BaseModel):
 
     def forward(self):
         """Run forward pass; called by both functions <optimize_parameters> and <test>."""
-        self.real_A_feat = self.netAE(self.real_A, self.real_B, self.hf_AB)  # G_A(A)
-        self.fake_B = self.netDec(self.real_A_feat, self.hf_AB)
-        if self.isTrain:
-            aug_real_A = RandomVerticalFlip(p=1)(self.real_A)
-            self.rec_A_feat = self.netAE(self.fake_B, aug_real_A, self.hf_BA)
-            self.rec_A = self.netDec(self.rec_A_feat, self.hf_BA)
+        self.s_feats, self.c_feats, h_feats = self.netAE(self.real_A, self.real_B)
+        cs_feat, adain_feat_3 = self.netTransformer(self.c_feats, self.s_feats, h_feats)
+        self.fake_B = self.netDec(cs_feat, adain_feat_3)
+
+        if self.opt.lambda_CYC > 0.0 and self.isTrain:
+            rec_s_feats, rec_c_feats, rec_h_feats = self.netAE(self.real_B, self.fake_B)
+            rec_cs_feat, rec_adain_feat_3 = self.netTransformer(rec_c_feats, rec_s_feats, rec_h_feats)
+            self.rec_B = self.netDec(rec_cs_feat, rec_adain_feat_3)
+
 
     def backward_D_basic(self, netD, style, fake):
         """Calculate GAN loss for the discriminator
@@ -193,7 +212,31 @@ class CPSTModel(BaseModel):
         else:
             self.loss_cyc = 0
 
-        self.loss_G = self.loss_cyc + self.loss_adversarial + self.loss_line
+        # global style loss
+        if self.opt.lambda_style > 0.0:
+            self.loss_style = torch.tensor(0., device=self.device)
+            stylized_feats = self.netAE.styEnc(self.fake_B)
+            for i in range(1, 5):
+                s_feats_mean, s_feats_std = networks.calc_mean_std(self.s_feats[i])
+                stylized_feats_mean, stylized_feats_std = networks.calc_mean_std(stylized_feats[i])
+                self.loss_style += self.criterionMSE(stylized_feats_mean, s_feats_mean) +\
+                                   self.criterionMSE(stylized_feats_std, s_feats_std)
+            self.loss_style = self.opt.lambda_style * self.loss_style
+        else:
+            self.loss_style = 0
+
+        # content loss
+        if self.opt.lambda_style > 0.0:
+            self.loss_content = torch.tensor(0., device=self.device)
+            stylized_feats, _ = self.netAE.conEnc(self.fake_B)
+            for i in range(1, 5):
+                self.loss_content += self.criterionMSE(networks.mean_variance_norm(stylized_feats[i]),
+                                                       networks.mean_variance_norm(self.c_feats[i]))
+            self.loss_content = self.opt.lambda_style * self.loss_content
+        else:
+            self.loss_content = 0
+
+        self.loss_G = self.loss_cyc + self.loss_adversarial + self.loss_line + self.loss_style + self.loss_content
 
         return self.loss_G
 
@@ -246,6 +289,6 @@ def init_net(net, init_type='normal', init_gain=0.02, gpu_ids=[]):
     if len(gpu_ids) > 0:
         assert (torch.cuda.is_available())
         net.to(gpu_ids[0])
-        #net = torch.nn.DataParallel(net, gpu_ids)  # multi-GPUs
+        # net = torch.nn.DataParallel(net, gpu_ids)  # multi-GPUs
     init_weights(net, init_type, init_gain=init_gain)
     return net

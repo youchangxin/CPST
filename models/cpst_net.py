@@ -2,6 +2,8 @@ import torch
 import torch.nn as nn
 import numpy as np
 
+from .networks import mean_variance_norm
+
 
 def get_wav(in_channels):
     """wavelet decomposition using conv2d"""
@@ -53,54 +55,65 @@ class WavePool(nn.Module):
 
 
 class ContentEncoder(nn.Module):
-    def __init__(self, encoder, disable_wavelet):
+    def __init__(self, enc_layers, disable_wavelet):
         super(ContentEncoder, self).__init__()
+        self.enc_layers = nn.ModuleList(enc_layers[:44])
+        self.enc_layers.load_state_dict(torch.load("vgg_normalised.pth"), strict=False)
+        for param in self.enc_layers.parameters():
+            param.requires_grad = False
         self.disable_wavelet = disable_wavelet
 
-        self.vgg = nn.Sequential(*encoder[:31])
+    def forward(self, x):
+        results = []
+        high_feats = []
+        pool_idxs = [7, 14, 27, 40]
+        relu_x_idxs = [3, 10, 17, 30, 43]
 
-        self.enc1 = nn.Sequential(*encoder[:7])
-        self.pool1 = WavePool(64)
-        self.enc2 = nn.Sequential(*encoder[8:14])
-        self.pool2 = WavePool(128)
-        self.enc3 = nn.Sequential(*encoder[15:27])
-        self.pool3 = WavePool(256)
-        self.enc4 = nn.Sequential(*encoder[28:31])
+        for idx, layer in enumerate(self.enc_layers):
+            if not self.disable_wavelet and idx in pool_idxs:
+                LL, LH, HL, HH = layer(x)
+                x = LL
+                high_feats.append(LH + HL + HH)
 
-    def forward(self, input, skips):
+            elif idx in relu_x_idxs:
+                x = layer(x)
+                results.append(x)
+
+            else:
+                x = layer(x)
+
         if self.disable_wavelet:
-            return self.vgg(input)
-
-        out = self.enc1(input)
-        LL, LH, HL, HH = self.pool1(out)
-        skips['pool1'] = [LH, HL, HH]
-
-        out = self.enc2(LL)
-        LL, LH, HL, HH = self.pool2(out)
-        skips['pool2'] = [LH, HL, HH]
-
-        out = self.enc3(LL)
-        LL, LH, HL, HH = self.pool3(out)
-        skips['pool3'] = [LH, HL, HH]
-
-        out = self.enc4(LL)
-        return out
+            return results, None
+        else:
+            return results, high_feats
 
 
 class StyleEncoder(nn.Module):
-    def __init__(self, encoder):
+    def __init__(self, enc_layers):
         super(StyleEncoder, self).__init__()
-        self.styleEnc = nn.Sequential(*encoder[:31])  # input -> relu4_1 512
+        enc_layers = nn.Sequential(*enc_layers[:44])
+        enc_layers.load_state_dict(torch.load("style_vgg.pth"), strict=False)
+        enc_1 = nn.Sequential(*enc_layers[:4])     # input   -> relu1_1 64
+        enc_2 = nn.Sequential(*enc_layers[4:11])   # relu1_1 -> relu2_1 128
+        enc_3 = nn.Sequential(*enc_layers[11:18])  # relu2_1 -> relu3_1 256
+        enc_4 = nn.Sequential(*enc_layers[18:31])  # relu3_1 -> relu4_1 512
+        enc_5 = nn.Sequential(*enc_layers[31:44])  # relu4_1 -> relu5_1
+        self.image_encoder_layers = [enc_1, enc_2, enc_3, enc_4, enc_5]
+        for layer in self.image_encoder_layers:
+            for param in layer.parameters():
+                param.requires_grad = False
 
-    def forward(self, input):
-        results = self.styleEnc(input)
-        return results
+    def forward(self, input_img):
+        results = [input_img]
+        for i in range(5):
+            func = self.image_encoder_layers[i]
+            results.append(func(results[-1]))
+        return results[1:]
 
 
 class Encoder(nn.Module):
     def __init__(self, disable_wavelet):
         super(Encoder, self).__init__()
-
         self.conEnc = ContentEncoder(self.backbone(disable_wavelet), disable_wavelet)
         self.styEnc = StyleEncoder(self.backbone())
 
@@ -166,70 +179,121 @@ class Encoder(nn.Module):
         ]
         return backbone
 
-    def calc_mean_std(self, feat, eps=1e-5):
-        # eps is a small value added to the variance to avoid divide-by-zero.
-        size = feat.size()
-        assert (len(size) == 4)
-        N, C = size[:2]
-        feat_var = feat.view(N, C, -1).var(dim=2) + eps
-        feat_std = feat_var.sqrt().view(N, C, 1, 1)
-        feat_mean = feat.view(N, C, -1).mean(dim=2).view(N, C, 1, 1)
-        return feat_mean, feat_std
-
-    def adain(self, content_feat, style_feat):
-        assert (content_feat.size()[:2] == style_feat.size()[:2])
-        size = content_feat.size()
-        style_mean, style_std = self.calc_mean_std(style_feat)
-        content_mean, content_std = self.calc_mean_std(content_feat)
-
-        normalized_feat = (content_feat - content_mean.expand(
-            size)) / content_std.expand(size)
-        return normalized_feat * style_std.expand(size) + style_mean.expand(size)
-
-    def forward(self, content, style, skips, encoded_only=False):
+    def forward(self, content, style):
         style_feats = self.styEnc(style)
-        content_feats = self.conEnc(content, skips)
-        if encoded_only:
-            return content_feats, style_feats
+        content_feats, high_feats = self.conEnc(content)
+        return style_feats, content_feats, high_feats
+
+
+class AdaAttN(nn.Module):
+    def __init__(self, in_planes,  key_planes=None):
+        super(AdaAttN, self).__init__()
+        if key_planes is None:
+            key_planes = in_planes
+        self.f = nn.Conv2d(key_planes, key_planes, 1)
+        self.g = nn.Conv2d(key_planes, key_planes, 1)
+        self.h = nn.Conv2d(in_planes, in_planes, 1)
+
+    def forward(self, c_x, s_x, c_1x, s_1x):
+        Q = self.f(c_1x)
+        Q = Q.flatten(-2, -1).transpose(1, 2)
+        K = self.g(s_1x)
+        K = K.flatten(-2, -1)
+        V = self.h(s_x)
+        V = V.flatten(-2, -1).transpose(1, 2)
+        A = torch.softmax(torch.bmm(Q, K), -1)
+        M = torch.bmm(A, V)
+        Var = torch.bmm(A, V ** 2) - M ** 2
+        S = torch.sqrt(Var.clamp(min=0))
+        M = M.transpose(1, 2).view(c_x.size())
+        S = S.transpose(1, 2).view(c_x.size())
+        return S * c_x + M
+
+
+class Transformer(nn.Module):
+    def __init__(self, disable_wavelet=False, shallow_layer=False):
+        super().__init__()
+        self.disable_wavelet = disable_wavelet
+
+        self.net_adaattn_3 = AdaAttN(in_planes=256, key_planes=256 + 128 + 64 if shallow_layer else 256)
+        self.net_adaattn_4 = AdaAttN(in_planes=512, key_planes=512 + 256 + 128 + 64 if shallow_layer else 512)
+        self.net_adaattn_5 = AdaAttN(in_planes=512, key_planes=512 + 512 + 256 + 128 + 64 if shallow_layer else 512)
+
+        self.wavelet_attn_1 = WaveletAttention(128, channel_x2=True)
+        self.wavelet_attn_2 = WaveletAttention(256, channel_x2=True)
+        self.wavelet_attn_3 = WaveletAttention(512, channel_x2=False)
+
+        self.shallow_layer = shallow_layer
+        self.upsample5_1 = nn.Upsample(scale_factor=2, mode='nearest')
+        self.merge_conv_pad = nn.ReflectionPad2d((1, 1, 1, 1))
+        self.merge_conv = nn.Conv2d(512, 512, (3, 3))
+
+    def get_key(self, feats, last_layer_idx, need_shallow=True):
+        if need_shallow and last_layer_idx > 0:
+            results = []
+            _, _, h, w = feats[last_layer_idx].shape
+            for i in range(last_layer_idx):
+                results.append(mean_variance_norm(nn.functional.interpolate(feats[i], (h, w))))
+            results.append(mean_variance_norm(feats[last_layer_idx]))
+            return torch.cat(results, dim=1)
         else:
-            adain_feat = self.adain(content_feats, style_feats)
-            return adain_feat
+            return mean_variance_norm(feats[last_layer_idx])
+    def forward(self, c_feats, s_feats, h_feats):
+
+        if self.disable_wavelet:
+            c_3 = c_feats[2]
+            c_4 = c_feats[3]
+            c_5 = c_feats[4]
+
+        else:
+            c_3 = self.wavelet_attn_1(h_feats[1])
+            c_4 = self.wavelet_attn_2(h_feats[2])
+            c_5 = self.wavelet_attn_3(h_feats[3])
+
+        adain_feat_3 = self.net_adaattn_3(c_3, s_feats[2],
+                                          self.get_key(c_feats, 2, self.shallow_layer),
+                                          self.get_key(s_feats, 2, self.shallow_layer),)
+
+        adain_feat_4 = self.net_adaattn_4(c_4, s_feats[3],
+                                          self.get_key(c_feats, 3, self.shallow_layer),
+                                          self.get_key(s_feats, 3, self.shallow_layer),)
+
+        adain_feat_5 = self.net_adaattn_5(c_5, s_feats[4],
+                                          self.get_key(c_feats, 4, self.shallow_layer),
+                                          self.get_key(s_feats, 4, self.shallow_layer),)
+        cs_feat = self.merge_conv(self.merge_conv_pad(adain_feat_4 + self.upsample5_1(adain_feat_5)))
+
+        return cs_feat, adain_feat_3
+
 
 
 class Decoder(nn.Module):
-    def __init__(self, disable_wavelet):
+    def __init__(self, skip_connection_3=False):
         super(Decoder, self).__init__()
-        self.disable_wavelet = disable_wavelet
-        decoder = [
+        self.skip_connection_3 = skip_connection_3
+        decoder_layer = [
             nn.ReflectionPad2d((1, 1, 1, 1)),
             nn.Conv2d(512, 256, (3, 3)),
             nn.ReLU(),  # 256
-            nn.ReflectionPad2d((1, 1, 1, 1)),
-            nn.Conv2d(256, 256, (3, 3)),
-            nn.ReLU(),  # 128
             nn.Upsample(scale_factor=2, mode='nearest'),
             nn.ReflectionPad2d((1, 1, 1, 1)),
+            nn.Conv2d(256 + 256 if skip_connection_3 else 256, 256, (3, 3)),
+            nn.ReLU(),
+            nn.ReflectionPad2d((1, 1, 1, 1)),
             nn.Conv2d(256, 256, (3, 3)),
             nn.ReLU(),
             nn.ReflectionPad2d((1, 1, 1, 1)),
             nn.Conv2d(256, 256, (3, 3)),
             nn.ReLU(),
-
             nn.ReflectionPad2d((1, 1, 1, 1)),
             nn.Conv2d(256, 128, (3, 3)),
             nn.ReLU(),  # 128
-            nn.ReflectionPad2d((1, 1, 1, 1)),
-            nn.Conv2d(128, 128, (3, 3)),
-            nn.ReLU(),
             nn.Upsample(scale_factor=2, mode='nearest'),
             nn.ReflectionPad2d((1, 1, 1, 1)),
             nn.Conv2d(128, 128, (3, 3)),
             nn.ReLU(),
             nn.ReflectionPad2d((1, 1, 1, 1)),
             nn.Conv2d(128, 64, (3, 3)),
-            nn.ReLU(),
-            nn.ReflectionPad2d((1, 1, 1, 1)),
-            nn.Conv2d(64, 64, (3, 3)),
             nn.ReLU(),  # 64
             nn.Upsample(scale_factor=2, mode='nearest'),
             nn.ReflectionPad2d((1, 1, 1, 1)),
@@ -238,87 +302,49 @@ class Decoder(nn.Module):
             nn.ReflectionPad2d((1, 1, 1, 1)),
             nn.Conv2d(64, 3, (3, 3))
         ]
-        if self.disable_wavelet:
-            self.whole_decoder = nn.Sequential(*decoder)
-        self.dec1 = nn.Sequential(*decoder[:3])
-        self.dec2 = nn.Sequential(*decoder[3:16])
-        self.dec3 = nn.Sequential(*decoder[16:26])
-        self.dec4 = nn.Sequential(*decoder[26:])
+        self.dec_1 = nn.Sequential(*decoder_layer[:4])
+        self.dec_2 = nn.Sequential(*decoder_layer[4:])
 
-        self.att1 = Attention(256)
-        self.att2 = Attention(128)
-        self.att3 = Attention(64)
-
-    def forward(self, adain_feat, skips):
-        if self.disable_wavelet:
-            return self.whole_decoder(adain_feat)
-        out = self.dec1(adain_feat)
-
-        #hf = torch.cat(skips["pool3"], dim=1)
-        hf = torch.sum(torch.stack(skips["pool3"]), dim=0)
-        out = torch.add(out, self.att1(hf))
-        out = self.dec2(out)
-
-        #hf = torch.cat(skips["pool2"], dim=1)
-        hf = torch.sum(torch.stack(skips["pool2"]), dim=0)
-        out = torch.add(out, self.att2(hf))
-        out = self.dec3(out)
-
-        #hf = torch.cat(skips["pool1"], dim=1)
-        hf = torch.sum(torch.stack(skips["pool1"]), dim=0)
-        out = torch.add(out, self.att3(hf))
-        out = self.dec4(out)
-
-        return out
+    def forward(self, cs_feat, adain_3_feat=None):
+        cs = self.dec_1(cs_feat)
+        if self.skip_connection_3:
+            cs = self.dec_2(torch.cat((cs, adain_3_feat), dim=1))
+        else:
+            cs = self.dec_2(cs)
+        return cs
 
 
-class Attention(nn.Module):
-    def __init__(self, in_planes):
-        super(Attention, self).__init__()
-        self.conv1 = nn.Conv2d(in_planes, in_planes, (1, 1))
-        self.in1 = nn.InstanceNorm2d(in_planes)
+class WaveletAttention(nn.Module):
+    def __init__(self, in_channel, channel_x2=False, reduction=4):
+        super(WaveletAttention, self).__init__()
+        out_channel = in_channel * 2 if channel_x2 else in_channel
+
+        self.pad = nn.ReflectionPad2d((1, 1, 1, 1))
+        self.conv1 = nn.Conv2d(in_channel, out_channel, kernel_size=3)
+        self.in1 = nn.InstanceNorm2d(out_channel)
         self.relu = nn.ReLU()
+
         self.avg_pool = nn.AdaptiveAvgPool2d(1)
+        self.squeeze = nn.Sequential(
+            nn.ReflectionPad2d((1, 1, 1, 1)),
+            nn.Conv2d(out_channel, out_channel // reduction, kernel_size=3),
+            nn.ReLU(inplace=True),
+            nn.ReflectionPad2d((1, 1, 1, 1)),
+            nn.Conv2d(out_channel // reduction, out_channel, kernel_size=3),
+        )
         self.sf = nn.Softmax(dim=1)
 
     def forward(self, input):
-        x = self.conv1(input)
+        x = self.pad(input)
+        x = self.conv1(x)
         x = self.in1(x)
         x = self.relu(x)
 
         residual = x
         b, c, _, _ = residual.size()
+
         # channel attention
-        y = self.avg_pool(x).view(b, c, 1, 1)
+        y = self.squeeze(x)
+        y = self.avg_pool(y).view(b, c, 1, 1)
         A = self.sf(y)
         return residual + x * A
-
-
-class WaveletAttention(nn.Module):
-    def __init__(self, in_planes):
-        super(WaveletAttention, self).__init__()
-        self.q = nn.Conv2d(in_planes, in_planes, (1, 1))
-        self.k = nn.Conv2d(in_planes, in_planes, (1, 1))
-        self.v = nn.Conv2d(in_planes, in_planes, (1, 1))
-        self.sm = nn.Softmax(dim=-1)
-        self.out_conv = nn.Conv2d(in_planes, in_planes, (1, 1))
-
-    def forward(self, input):
-        Q = self.q(input)
-        K = self.k(input)
-        V = self.v(input)
-
-        b, c, h, w = Q.size()
-        Q = Q.view(b, -1, w * h).permute(0, 2, 1)
-        K = K.view(b, -1, w * h)
-        S = torch.bmm(Q, K)
-        S = self.sm(S)
-
-        V = V.view(b, -1, w * h)
-        O = torch.bmm(V, S.permute(0, 2, 1))
-        O = O.view(b, c, h, w)
-        O = self.out_conv(O)
-        O += input
-        return O
-
-

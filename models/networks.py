@@ -680,11 +680,30 @@ class GroupedChannelNorm(nn.Module):
         super().__init__()
         self.num_groups = num_groups
 
-    def forward(self, x):
-        shape = list(x.shape)
-        new_shape = [shape[0], self.num_groups, shape[1] // self.num_groups] + shape[2:]
-        x = x.view(*new_shape)
-        mean = x.mean(dim=2, keepdim=True)
-        std = x.std(dim=2, keepdim=True)
-        x_norm = (x - mean) / (std + 1e-7)
-        return x_norm.view(*shape)
+
+def forward(self, x):
+    shape = list(x.shape)
+    new_shape = [shape[0], self.num_groups, shape[1] // self.num_groups] + shape[2:]
+    x = x.view(*new_shape)
+    mean = x.mean(dim=2, keepdim=True)
+    std = x.std(dim=2, keepdim=True)
+    x_norm = (x - mean) / (std + 1e-7)
+    return x_norm.view(*shape)
+
+
+def calc_mean_std(feat, eps=1e-5):
+    # eps is a small value added to the variance to avoid divide-by-zero.
+    size = feat.size()
+    assert (len(size) == 4)
+    N, C = size[:2]
+    feat_var = feat.view(N, C, -1).var(dim=2) + eps
+    feat_std = feat_var.sqrt().view(N, C, 1, 1)
+    feat_mean = feat.view(N, C, -1).mean(dim=2).view(N, C, 1, 1)
+    return feat_mean, feat_std
+
+
+def mean_variance_norm(feat):
+    size = feat.size()
+    mean, std = calc_mean_std(feat)
+    normalized_feat = (feat - mean.expand(size)) / std.expand(size)
+    return normalized_feat
