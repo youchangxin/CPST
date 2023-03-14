@@ -91,8 +91,8 @@ class ContentEncoder(nn.Module):
 class StyleEncoder(nn.Module):
     def __init__(self, enc_layers):
         super(StyleEncoder, self).__init__()
-        enc_layers = nn.Sequential(*enc_layers[:44])
-        enc_layers.load_state_dict(torch.load("style_vgg.pth"), strict=False)
+        self.enc_layers = nn.Sequential(*enc_layers[:44])
+        self.enc_layers.load_state_dict(torch.load("style_vgg.pth"), strict=False)
         enc_1 = nn.Sequential(*enc_layers[:4])     # input   -> relu1_1 64
         enc_2 = nn.Sequential(*enc_layers[4:11])   # relu1_1 -> relu2_1 128
         enc_3 = nn.Sequential(*enc_layers[11:18])  # relu2_1 -> relu3_1 256
@@ -193,8 +193,10 @@ class AdaAttN(nn.Module):
         self.f = nn.Conv2d(key_planes, key_planes, 1)
         self.g = nn.Conv2d(key_planes, key_planes, 1)
         self.h = nn.Conv2d(in_planes, in_planes, 1)
+        self.sm = nn.Softmax(dim=-1)
 
     def forward(self, c_x, s_x, c_1x, s_1x):
+        """
         Q = self.f(c_1x)
         Q = Q.flatten(-2, -1).transpose(1, 2)
         K = self.g(s_1x)
@@ -208,6 +210,26 @@ class AdaAttN(nn.Module):
         M = M.transpose(1, 2).view(c_x.size())
         S = S.transpose(1, 2).view(c_x.size())
         return S * c_x + M
+        """
+        F = self.f(c_1x)
+        G = self.g(s_1x)
+        H = self.h(s_x)
+        b, _, h_g, w_g = G.size()
+        G = G.view(b, -1, w_g * h_g).contiguous()
+        style_flat = H.view(b, -1, w_g * h_g).transpose(1, 2).contiguous()
+        b, _, h, w = F.size()
+        F = F.view(b, -1, w * h).permute(0, 2, 1)
+        S = torch.bmm(F, G)
+        # S: b, n_c, n_s
+        S = self.sm(S)
+        # mean: b, n_c, c
+        mean = torch.bmm(S, style_flat)
+        # std: b, n_c, c
+        std = torch.sqrt(torch.relu(torch.bmm(S, style_flat ** 2) - mean ** 2))
+        # mean, std: b, c, h, w
+        mean = mean.view(b, h, w, -1).permute(0, 3, 1, 2).contiguous()
+        std = std.view(b, h, w, -1).permute(0, 3, 1, 2).contiguous()
+        return std * c_x + mean
 
 
 class Transformer(nn.Module):
@@ -241,14 +263,14 @@ class Transformer(nn.Module):
     def forward(self, c_feats, s_feats, h_feats):
 
         if self.disable_wavelet:
-            c_3 = c_feats[2]
-            c_4 = c_feats[3]
-            c_5 = c_feats[4]
+            c_3 = mean_variance_norm(c_feats[2])
+            c_4 = mean_variance_norm(c_feats[3])
+            c_5 = mean_variance_norm(c_feats[4])
 
         else:
-            c_3 = self.wavelet_attn_1(h_feats[1])
-            c_4 = self.wavelet_attn_2(h_feats[2])
-            c_5 = self.wavelet_attn_3(h_feats[3])
+            c_3 = mean_variance_norm(self.wavelet_attn_1(h_feats[1]))
+            c_4 = mean_variance_norm(self.wavelet_attn_2(h_feats[2]))
+            c_5 = mean_variance_norm(self.wavelet_attn_3(h_feats[3]))
 
         adain_feat_3 = self.net_adaattn_3(c_3, s_feats[2],
                                           self.get_key(c_feats, 2, self.shallow_layer),
@@ -264,7 +286,6 @@ class Transformer(nn.Module):
         cs_feat = self.merge_conv(self.merge_conv_pad(adain_feat_4 + self.upsample5_1(adain_feat_5)))
 
         return cs_feat, adain_feat_3
-
 
 
 class Decoder(nn.Module):

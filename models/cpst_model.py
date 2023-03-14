@@ -30,8 +30,8 @@ class CPSTModel(BaseModel):
         parser.add_argument('--lambda_GAN_D', type=float, default=0.2, help='weight for GAN loss：GAN(G(Is, Ic))')
         parser.add_argument('--lambda_style', type=float, default=1.0, help='weight for global style loss')
         parser.add_argument('--lambda_content', type=float, default=1.0, help='weight for global content loss')
-        parser.add_argument('--lambda_GAN_Line', type=float, default=1.0, help='weight for Line loss')
-        parser.add_argument('--lambda_CYC', type=float, default=1.0,
+        parser.add_argument('--lambda_GAN_Line', type=float, default=0.0, help='weight for Line loss')
+        parser.add_argument('--lambda_CYC', type=float, default=0.0,
                             help='weight for l1 reconstructe loss:||Ic - G(G(Ic, Is),Ic)||')
 
         opt, _ = parser.parse_known_args()
@@ -65,32 +65,35 @@ class CPSTModel(BaseModel):
         if self.opt.lambda_style > 0.0 and self.isTrain:
             self.loss_names += ['style']
 
-            if self.opt.lambda_content > 0.0 and self.isTrain:
-                self.loss_names += ['content']
+        if self.opt.lambda_content > 0.0 and self.isTrain:
+            self.loss_names += ['content']
 
         if self.opt.lambda_GAN_D > 0.0 and self.isTrain:
             self.loss_names += ['D']
 
         if self.isTrain:
-            self.model_names = ["netTransformer", "netDec", 'netD']
+            self.model_names = ["netTransformer", "netDec", "netD"]
         else:  # during test time, only load G
             self.model_names = ['netTransformer', "netDec"]
 
         # define networks
-        self.netAE = cpst_net.Encoder(opt.disable_wavelet)
+        self.netEnc = cpst_net.Encoder(opt.disable_wavelet)
         self.netTransformer = cpst_net.Transformer(disable_wavelet=opt.disable_wavelet, shallow_layer=opt.shallow_layer)
         self.netDec = cpst_net.Decoder(skip_connection_3=opt.skip_connection_3)
         init_net(self.netTransformer, 'normal', 0.02, self.gpu_ids)
         init_net(self.netDec, 'normal', 0.02, self.gpu_ids)
-        self.netAE.to(self.device)
+        self.netEnc.to(self.device)
         self.netTransformer.to(self.device)
         self.netDec.to(self.device)
 
         if self.isTrain:
             # load edge detection model
-            self.detection = edgeDetection.DoobNet()
-            self.detection.load_state_dict(torch.load('models/doobnet.pth.tar', map_location="cpu")['state_dict'])
-            self.detection.to(self.device)
+            if self.opt.lambda_GAN_Line > 0.0:
+                self.detection = edgeDetection.DoobNet()
+                self.detection.load_state_dict(torch.load('models/doobnet.pth.tar', map_location="cpu")['state_dict'])
+                self.detection.to(self.device)
+                self.criterionLine = nn.BCELoss().to(self.device)
+
             self.fake_pool = ImagePool(opt.pool_size)
             self.netD = networks.define_D(opt.output_nc, opt.ndf, opt.netD, opt.n_layers_D,
                                           opt.crop_size, opt.feature_dim, opt.max_conv_dim,
@@ -99,7 +102,6 @@ class CPSTModel(BaseModel):
 
             self.criterionGAN = networks.GANLoss(opt.gan_mode).to(self.device)
             self.criterionCyc = torch.nn.L1Loss().to(self.device)
-            self.criterionLine = nn.BCELoss().to(self.device)
             self.criterionMSE = torch.nn.MSELoss().to(self.device)
 
             # define optimizer
@@ -144,15 +146,14 @@ class CPSTModel(BaseModel):
 
     def forward(self):
         """Run forward pass; called by both functions <optimize_parameters> and <test>."""
-        self.s_feats, self.c_feats, h_feats = self.netAE(self.real_A, self.real_B)
+        self.s_feats, self.c_feats, h_feats = self.netEnc(self.real_A, self.real_B)
         cs_feat, adain_feat_3 = self.netTransformer(self.c_feats, self.s_feats, h_feats)
         self.fake_B = self.netDec(cs_feat, adain_feat_3)
 
         if self.opt.lambda_CYC > 0.0 and self.isTrain:
-            rec_s_feats, rec_c_feats, rec_h_feats = self.netAE(self.real_B, self.fake_B)
+            rec_s_feats, rec_c_feats, rec_h_feats = self.netEnc(self.real_B, self.fake_B)
             rec_cs_feat, rec_adain_feat_3 = self.netTransformer(rec_c_feats, rec_s_feats, rec_h_feats)
             self.rec_B = self.netDec(rec_cs_feat, rec_adain_feat_3)
-
 
     def backward_D_basic(self, netD, style, fake):
         """Calculate GAN loss for the discriminator
@@ -215,7 +216,7 @@ class CPSTModel(BaseModel):
         # global style loss
         if self.opt.lambda_style > 0.0:
             self.loss_style = torch.tensor(0., device=self.device)
-            stylized_feats = self.netAE.styEnc(self.fake_B)
+            stylized_feats = self.netEnc.styEnc(self.fake_B)
             for i in range(1, 5):
                 s_feats_mean, s_feats_std = networks.calc_mean_std(self.s_feats[i])
                 stylized_feats_mean, stylized_feats_std = networks.calc_mean_std(stylized_feats[i])
@@ -228,7 +229,7 @@ class CPSTModel(BaseModel):
         # content loss
         if self.opt.lambda_style > 0.0:
             self.loss_content = torch.tensor(0., device=self.device)
-            stylized_feats, _ = self.netAE.conEnc(self.fake_B)
+            stylized_feats, _ = self.netEnc.conEnc(self.fake_B)
             for i in range(1, 5):
                 self.loss_content += self.criterionMSE(networks.mean_variance_norm(stylized_feats[i]),
                                                        networks.mean_variance_norm(self.c_feats[i]))
