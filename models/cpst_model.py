@@ -260,7 +260,7 @@ class CPSTModel(BaseModel):
             self.loss_local = 0
 
         # content loss
-        if self.opt.loss_content > 0.0:
+        if self.opt.lambda_content > 0.0:
             self.loss_content = torch.tensor(0., device=self.device)
             stylized_feats, _ = self.netEnc.conEnc(self.fake_B)
             for i in range(1, 5):
