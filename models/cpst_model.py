@@ -8,7 +8,7 @@ from . import edgeDetection
 import torch.nn as nn
 from torch.nn import init
 from torchvision.transforms import RandomVerticalFlip
-from .networks import calc_mean_std, mean_variance_norm
+from .networks import calc_mean_std, mean_variance_norm, get_key
 
 
 class CPSTModel(BaseModel):
@@ -82,8 +82,8 @@ class CPSTModel(BaseModel):
 
         # define networks
         self.netEnc = cpst_net.Encoder(opt.disable_wavelet)
-        self.netTransformer = cpst_net.Transformer(disable_wavelet=opt.disable_wavelet, shallow_layer=opt.shallow_layer)
-        self.netDec = cpst_net.Decoder(skip_connection_3=opt.skip_connection_3)
+        self.netTransformer = cpst_net.Transformer(shallow_layer=opt.shallow_layer)
+        self.netDec = cpst_net.Decoder(skip_connection_3=opt.skip_connection_3, disable_wavelet=opt.disable_wavelet)
         init_net(self.netTransformer, 'normal', 0.02, self.gpu_ids)
         init_net(self.netDec, 'normal', 0.02, self.gpu_ids)
         self.netEnc.to(self.device)
@@ -151,8 +151,8 @@ class CPSTModel(BaseModel):
     def forward(self):
         """Run forward pass; called by both functions <optimize_parameters> and <test>."""
         self.s_feats, self.c_feats, h_feats = self.netEnc(self.real_A, self.real_B)
-        cs_feat, adain_feat_3 = self.netTransformer(self.c_feats, self.s_feats, h_feats)
-        self.fake_B = self.netDec(cs_feat, adain_feat_3)
+        cs_feat, adain_feat_3 = self.netTransformer(self.c_feats, self.s_feats)
+        self.fake_B = self.netDec(cs_feat, h_feats, adain_feat_3)
 
         if self.opt.lambda_CYC > 0.0 and self.isTrain:
             rec_s_feats, rec_c_feats, rec_h_feats = self.netEnc(self.real_B, self.fake_B)
@@ -234,8 +234,8 @@ class CPSTModel(BaseModel):
         if self.opt.lambda_local > 0.0:
             self.loss_local = torch.tensor(0., device=self.device)
             for i in range(1, 5):
-                c_key = self.netTransformer.get_key(self.c_feats, i, self.opt.shallow_layer)
-                s_key = self.netTransformer.get_key(self.s_feats, i, self.opt.shallow_layer)
+                c_key = get_key(self.c_feats, i, self.opt.shallow_layer)
+                s_key = get_key(self.s_feats, i, self.opt.shallow_layer)
                 s_value = self.s_feats[i]
                 b, _, h_s, w_s = s_key.size()
                 s_key = s_key.view(b, -1, h_s * w_s).contiguous()

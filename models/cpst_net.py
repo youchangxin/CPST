@@ -2,7 +2,7 @@ import torch
 import torch.nn as nn
 import numpy as np
 
-from .networks import mean_variance_norm
+from .networks import mean_variance_norm, get_key
 
 
 def get_wav(in_channels):
@@ -196,21 +196,6 @@ class AdaAttN(nn.Module):
         self.sm = nn.Softmax(dim=-1)
 
     def forward(self, c_x, s_x, c_1x, s_1x):
-        """
-        Q = self.f(c_1x)
-        Q = Q.flatten(-2, -1).transpose(1, 2)
-        K = self.g(s_1x)
-        K = K.flatten(-2, -1)
-        V = self.h(s_x)
-        V = V.flatten(-2, -1).transpose(1, 2)
-        A = torch.softmax(torch.bmm(Q, K), -1)
-        M = torch.bmm(A, V)
-        Var = torch.bmm(A, V ** 2) - M ** 2
-        S = torch.sqrt(Var.clamp(min=0))
-        M = M.transpose(1, 2).view(c_x.size())
-        S = S.transpose(1, 2).view(c_x.size())
-        return S * c_x + M
-        """
         F = self.f(c_1x)
         G = self.g(s_1x)
         H = self.h(s_x)
@@ -233,72 +218,50 @@ class AdaAttN(nn.Module):
 
 
 class Transformer(nn.Module):
-    def __init__(self, disable_wavelet=False, shallow_layer=False):
+    def __init__(self, shallow_layer=False):
         super().__init__()
-        self.disable_wavelet = disable_wavelet
-
         self.net_adaattn_3 = AdaAttN(in_planes=256, key_planes=256 + 128 + 64 if shallow_layer else 256)
         self.net_adaattn_4 = AdaAttN(in_planes=512, key_planes=512 + 256 + 128 + 64 if shallow_layer else 512)
         self.net_adaattn_5 = AdaAttN(in_planes=512, key_planes=512 + 512 + 256 + 128 + 64 if shallow_layer else 512)
-
-        self.wavelet_attn_1 = WaveletAttention(128, channel_x2=True)
-        self.wavelet_attn_2 = WaveletAttention(256, channel_x2=True)
-        self.wavelet_attn_3 = WaveletAttention(512, channel_x2=False)
 
         self.shallow_layer = shallow_layer
         self.upsample5_1 = nn.Upsample(scale_factor=2, mode='nearest')
         self.merge_conv_pad = nn.ReflectionPad2d((1, 1, 1, 1))
         self.merge_conv = nn.Conv2d(512, 512, (3, 3))
 
-    def get_key(self, feats, last_layer_idx, need_shallow=True):
-        if need_shallow and last_layer_idx > 0:
-            results = []
-            _, _, h, w = feats[last_layer_idx].shape
-            for i in range(last_layer_idx):
-                results.append(mean_variance_norm(nn.functional.interpolate(feats[i], (h, w))))
-            results.append(mean_variance_norm(feats[last_layer_idx]))
-            return torch.cat(results, dim=1)
-        else:
-            return mean_variance_norm(feats[last_layer_idx])
-    def forward(self, c_feats, s_feats, h_feats):
-
-        if self.disable_wavelet:
-            c_3 = mean_variance_norm(c_feats[2])
-            c_4 = mean_variance_norm(c_feats[3])
-            c_5 = mean_variance_norm(c_feats[4])
-
-        else:
-            c_3 = mean_variance_norm(self.wavelet_attn_1(h_feats[1]))
-            c_4 = mean_variance_norm(self.wavelet_attn_2(h_feats[2]))
-            c_5 = mean_variance_norm(self.wavelet_attn_3(h_feats[3]))
+    def forward(self, c_feats, s_feats):
+        c_3 = mean_variance_norm(c_feats[2])
+        c_4 = mean_variance_norm(c_feats[3])
+        c_5 = mean_variance_norm(c_feats[4])
 
         adain_feat_3 = self.net_adaattn_3(c_3, s_feats[2],
-                                          self.get_key(c_feats, 2, self.shallow_layer),
-                                          self.get_key(s_feats, 2, self.shallow_layer),)
+                                          get_key(c_feats, 2, self.shallow_layer),
+                                          get_key(s_feats, 2, self.shallow_layer),)
 
         adain_feat_4 = self.net_adaattn_4(c_4, s_feats[3],
-                                          self.get_key(c_feats, 3, self.shallow_layer),
-                                          self.get_key(s_feats, 3, self.shallow_layer),)
+                                          get_key(c_feats, 3, self.shallow_layer),
+                                          get_key(s_feats, 3, self.shallow_layer),)
 
         adain_feat_5 = self.net_adaattn_5(c_5, s_feats[4],
-                                          self.get_key(c_feats, 4, self.shallow_layer),
-                                          self.get_key(s_feats, 4, self.shallow_layer),)
+                                          get_key(c_feats, 4, self.shallow_layer),
+                                          get_key(s_feats, 4, self.shallow_layer),)
         cs_feat = self.merge_conv(self.merge_conv_pad(adain_feat_4 + self.upsample5_1(adain_feat_5)))
 
         return cs_feat, adain_feat_3
 
 
 class Decoder(nn.Module):
-    def __init__(self, skip_connection_3=False):
+    def __init__(self, skip_connection_3=False, disable_wavelet=False):
         super(Decoder, self).__init__()
         self.skip_connection_3 = skip_connection_3
+        self.disable_wavelet = disable_wavelet
         decoder_layer = [
             nn.ReflectionPad2d((1, 1, 1, 1)),
             nn.Conv2d(512, 256, (3, 3)),
-            nn.ReLU(),  # 256
+            nn.ReLU(),
             nn.Upsample(scale_factor=2, mode='nearest'),
             nn.ReflectionPad2d((1, 1, 1, 1)),
-            nn.Conv2d(256 + 256 if skip_connection_3 else 256, 256, (3, 3)),
+            nn.Conv2d(256  if skip_connection_3 else 256, 256, (3, 3)),
             nn.ReLU(),
             nn.ReflectionPad2d((1, 1, 1, 1)),
             nn.Conv2d(256, 256, (3, 3)),
@@ -324,14 +287,40 @@ class Decoder(nn.Module):
             nn.Conv2d(64, 3, (3, 3))
         ]
         self.dec_1 = nn.Sequential(*decoder_layer[:4])
-        self.dec_2 = nn.Sequential(*decoder_layer[4:])
+        self.dec_2 = nn.Sequential(*decoder_layer[4:17])
+        self.dec_3 = nn.Sequential(*decoder_layer[17:24])
+        self.dec_4 = nn.Sequential(*decoder_layer[24:])
+        self.decoder_layers = [self.dec_1, self.dec_2, self.dec_3, self.dec_4]
 
-    def forward(self, cs_feat, adain_3_feat=None):
-        cs = self.dec_1(cs_feat)
+        self.wavelet_attn_1 = WaveletAttention(64, channel_x2=True)
+        self.wavelet_attn_2 = WaveletAttention(128, channel_x2=True)
+        self.wavelet_attn_3 = WaveletAttention(256, channel_x2=True)
+
+    def forward(self, cs_feat, h_feats, adain_3_feat=None):
+        if self.disable_wavelet:
+            x = cs_feat
+            for i, dec in enumerate(self.decoder_layers):
+                if i == 1 and self.skip_connection_3:
+                    #x = dec(torch.cat((x, adain_3_feat), dim=1))
+                    x += adain_3_feat
+                else:
+                    x = dec(x)
+            return x
+
+        h_feat_1 = mean_variance_norm(self.wavelet_attn_1(h_feats[0]))
+        h_feat_2 = mean_variance_norm(self.wavelet_attn_2(h_feats[1]))
+        h_feat_3 = mean_variance_norm(self.wavelet_attn_3(h_feats[2]))
+
+        cs = cs_feat + h_feat_3
+        cs = self.dec_1(cs)
         if self.skip_connection_3:
-            cs = self.dec_2(torch.cat((cs, adain_3_feat), dim=1))
-        else:
-            cs = self.dec_2(cs)
+            #cs = self.dec_2(torch.cat((cs, adain_3_feat), dim=1))
+            cs += adain_3_feat
+        cs = cs + h_feat_2
+        cs = self.dec_2(cs)
+        cs = cs + h_feat_1
+        cs = self.dec_3(cs)
+        cs = self.dec_4(cs)
         return cs
 
 
