@@ -29,6 +29,7 @@ class CPSTModel(BaseModel):
                             help='weight for GAN loss：GAN(G(Ic, Is))')
         parser.add_argument('--lambda_GAN_D', type=float, default=0.2, help='weight for GAN loss：GAN(G(Is, Ic))')
         parser.add_argument('--lambda_style', type=float, default=1.0, help='weight for global style loss')
+        parser.add_argument('--lambda_local', type=float, default=1.0, help='weight for local style loss')
         parser.add_argument('--lambda_content', type=float, default=1.0, help='weight for global content loss')
         parser.add_argument('--lambda_GAN_Line', type=float, default=0.0, help='weight for Line loss')
         parser.add_argument('--lambda_CYC', type=float, default=0.0,
@@ -59,11 +60,14 @@ class CPSTModel(BaseModel):
             self.loss_names += ['line']
 
         if self.opt.lambda_CYC > 0.0 and self.isTrain:
-            self.visual_names += ['rec_A']
+            self.visual_names += ['rec_B']
             self.loss_names += ['cyc']
 
         if self.opt.lambda_style > 0.0 and self.isTrain:
             self.loss_names += ['style']
+
+        if self.opt.lambda_local > 0.0 and self.isTrain:
+            self.loss_names += ['local']
 
         if self.opt.lambda_content > 0.0 and self.isTrain:
             self.loss_names += ['content']
@@ -209,7 +213,7 @@ class CPSTModel(BaseModel):
 
         # L1 Cycle Loss
         if self.opt.lambda_CYC > 0.0:
-            self.loss_cyc = self.criterionCyc(self.rec_A, self.real_A) * self.opt.lambda_CYC
+            self.loss_cyc = self.criterionCyc(self.rec_B, self.real_B) * self.opt.lambda_CYC
         else:
             self.loss_cyc = 0
 
@@ -226,8 +230,37 @@ class CPSTModel(BaseModel):
         else:
             self.loss_style = 0
 
+        # local style loss
+        if self.opt.lambda_local > 0.0:
+            self.loss_local = torch.tensor(0., device=self.device)
+            for i in range(1, 5):
+                c_key = self.netTransformer.get_key(self.c_feats, i, self.opt.shallow_layer)
+                s_key = self.netTransformer.get_key(self.s_feats, i, self.opt.shallow_layer)
+                s_value = self.s_feats[i]
+                b, _, h_s, w_s = s_key.size()
+                s_key = s_key.view(b, -1, h_s * w_s).contiguous()
+                style_flat = s_value.view(b, -1, h_s * w_s).transpose(1, 2).contiguous()
+                b, _, h_c, w_c = c_key.size()
+                c_key = c_key.view(b, -1, h_c * w_c).permute(0, 2, 1).contiguous()
+                attn = torch.bmm(c_key, s_key)
+                # S: b, n_c, n_s
+                attn = torch.softmax(attn, dim=-1)
+                # mean: b, n_c, c
+                mean = torch.bmm(attn, style_flat)
+                # std: b, n_c, c
+                std = torch.sqrt(torch.relu(torch.bmm(attn, style_flat ** 2) - mean ** 2))
+                # mean, std: b, c, h, w
+                mean = mean.view(b, h_c, w_c, -1).permute(0, 3, 1, 2).contiguous()
+                std = std.view(b, h_c, w_c, -1).permute(0, 3, 1, 2).contiguous()
+                self.loss_local += self.criterionMSE(stylized_feats[i],
+                                                     std * networks.mean_variance_norm(self.c_feats[i]) + mean)
+            self.loss_local = self.opt.lambda_local * self.loss_local
+
+        else:
+            self.loss_local = 0
+
         # content loss
-        if self.opt.lambda_style > 0.0:
+        if self.opt.loss_content > 0.0:
             self.loss_content = torch.tensor(0., device=self.device)
             stylized_feats, _ = self.netEnc.conEnc(self.fake_B)
             for i in range(1, 5):
@@ -237,7 +270,8 @@ class CPSTModel(BaseModel):
         else:
             self.loss_content = 0
 
-        self.loss_G = self.loss_cyc + self.loss_adversarial + self.loss_line + self.loss_style + self.loss_content
+        self.loss_G = self.loss_cyc + self.loss_adversarial + self.loss_line \
+                      + self.loss_style + self.loss_content + self.loss_local
 
         return self.loss_G
 
