@@ -28,8 +28,8 @@ class CPSTModel(BaseModel):
         parser.add_argument('--lambda_GAN_Adversarial', type=float, default=1.5,
                             help='weight for GAN loss：GAN(G(Ic, Is))')
         parser.add_argument('--lambda_GAN_D', type=float, default=0.2, help='weight for GAN loss：GAN(G(Is, Ic))')
-        parser.add_argument('--lambda_style', type=float, default=1.0, help='weight for global style loss')
-        parser.add_argument('--lambda_local', type=float, default=1.0, help='weight for local style loss')
+        parser.add_argument('--lambda_style', type=float, default=0.1, help='weight for global style loss')
+        parser.add_argument('--lambda_local', type=float, default=0.1, help='weight for local style loss')
         parser.add_argument('--lambda_content', type=float, default=1.0, help='weight for global content loss')
         parser.add_argument('--lambda_GAN_Line', type=float, default=0.0, help='weight for Line loss')
         parser.add_argument('--lambda_CYC', type=float, default=0.0,
@@ -233,7 +233,7 @@ class CPSTModel(BaseModel):
         # local style loss
         if self.opt.lambda_local > 0.0:
             self.loss_local = torch.tensor(0., device=self.device)
-            for i in range(1, 5):
+            for i in range(2, 5):
                 c_key = get_key(self.c_feats, i, self.opt.shallow_layer)
                 s_key = get_key(self.s_feats, i, self.opt.shallow_layer)
                 s_value = self.s_feats[i]

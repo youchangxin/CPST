@@ -314,7 +314,7 @@ class Decoder(nn.Module):
         cs = cs_feat + h_feat_3
         cs = self.dec_1(cs)
         if self.skip_connection_3:
-            cs = torch.cat ((cs, adain_3_feat), dim=1)
+            cs = torch.cat((cs, adain_3_feat), dim=1)
         cs = self.dec_2(cs)
 
         cs = cs + h_feat_2
