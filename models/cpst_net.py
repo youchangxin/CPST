@@ -261,7 +261,7 @@ class Decoder(nn.Module):
             nn.ReLU(),
             nn.Upsample(scale_factor=2, mode='nearest'),
             nn.ReflectionPad2d((1, 1, 1, 1)),
-            nn.Conv2d(256  if skip_connection_3 else 256, 256, (3, 3)),
+            nn.Conv2d(256 + 256 if skip_connection_3 else 256, 256, (3, 3)),
             nn.ReLU(),
             nn.ReflectionPad2d((1, 1, 1, 1)),
             nn.Conv2d(256, 256, (3, 3)),
@@ -287,10 +287,11 @@ class Decoder(nn.Module):
             nn.Conv2d(64, 3, (3, 3))
         ]
         self.dec_1 = nn.Sequential(*decoder_layer[:4])
-        self.dec_2 = nn.Sequential(*decoder_layer[4:17])
-        self.dec_3 = nn.Sequential(*decoder_layer[17:24])
-        self.dec_4 = nn.Sequential(*decoder_layer[24:])
-        self.decoder_layers = [self.dec_1, self.dec_2, self.dec_3, self.dec_4]
+        self.dec_2 = nn.Sequential(*decoder_layer[4:10])
+        self.dec_3 = nn.Sequential(*decoder_layer[10:17])
+        self.dec_4 = nn.Sequential(*decoder_layer[17:24])
+        self.dec_5 = nn.Sequential(*decoder_layer[24:])
+        self.decoder_layers = [self.dec_1, self.dec_2, self.dec_3, self.dec_4, self.dec_5]
 
         self.wavelet_attn_1 = WaveletAttention(64, channel_x2=True)
         self.wavelet_attn_2 = WaveletAttention(128, channel_x2=True)
@@ -301,8 +302,7 @@ class Decoder(nn.Module):
             x = cs_feat
             for i, dec in enumerate(self.decoder_layers):
                 if i == 1 and self.skip_connection_3:
-                    #x = dec(torch.cat((x, adain_3_feat), dim=1))
-                    x += adain_3_feat
+                    x = dec(torch.cat((x, adain_3_feat), dim=1))
                 else:
                     x = dec(x)
             return x
@@ -314,13 +314,14 @@ class Decoder(nn.Module):
         cs = cs_feat + h_feat_3
         cs = self.dec_1(cs)
         if self.skip_connection_3:
-            #cs = self.dec_2(torch.cat((cs, adain_3_feat), dim=1))
-            cs += adain_3_feat
-        cs = cs + h_feat_2
+            cs = torch.cat ((cs, adain_3_feat), dim=1)
         cs = self.dec_2(cs)
-        cs = cs + h_feat_1
+
+        cs = cs + h_feat_2
         cs = self.dec_3(cs)
+        cs = cs + h_feat_1
         cs = self.dec_4(cs)
+        cs = self.dec_5(cs)
         return cs
 
 
