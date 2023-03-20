@@ -150,9 +150,9 @@ class CPSTModel(BaseModel):
 
     def forward(self):
         """Run forward pass; called by both functions <optimize_parameters> and <test>."""
-        self.s_feats, self.c_feats, h_feats = self.netEnc(self.real_A, self.real_B)
-        cs_feat, adain_feat_3 = self.netTransformer(self.c_feats, self.s_feats)
-        self.fake_B = self.netDec(cs_feat, h_feats, adain_feat_3)
+        self.s_feats, self.c_feats, h_feats, s_pool_feats = self.netEnc(self.real_A, self.real_B)
+        cs_feat, adain_feat_3, pool_adain_feats = self.netTransformer(self.c_feats, self.s_feats, h_feats, s_pool_feats)
+        self.fake_B = self.netDec(cs_feat, pool_adain_feats, adain_feat_3)
 
         if self.opt.lambda_CYC > 0.0 and self.isTrain:
             rec_s_feats, rec_c_feats, rec_h_feats = self.netEnc(self.real_B, self.fake_B)
@@ -220,10 +220,10 @@ class CPSTModel(BaseModel):
         # global style loss
         if self.opt.lambda_style > 0.0:
             self.loss_style = torch.tensor(0., device=self.device)
-            stylized_feats = self.netEnc.styEnc(self.fake_B)
+            stylized_feats, _ = self.netEnc.styEnc(self.fake_B)
             for i in range(1, 5):
-                s_feats_mean, s_feats_std = networks.calc_mean_std(self.s_feats[i])
-                stylized_feats_mean, stylized_feats_std = networks.calc_mean_std(stylized_feats[i])
+                s_feats_mean, s_feats_std = calc_mean_std(self.s_feats[i])
+                stylized_feats_mean, stylized_feats_std = calc_mean_std(stylized_feats[i])
                 self.loss_style += self.criterionMSE(stylized_feats_mean, s_feats_mean) +\
                                    self.criterionMSE(stylized_feats_std, s_feats_std)
             self.loss_style = self.opt.lambda_style * self.loss_style
