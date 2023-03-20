@@ -281,7 +281,7 @@ class Decoder(nn.Module):
         self.conv4_1 = nn.Conv2d(512, 256, 3, 1, 0)
 
         self.pool3 = nn.Upsample(scale_factor=2, mode='nearest') if disable_wavelet else WaveUnpool(256)
-        self.conv3_4 = nn.Conv2d(256, 256, 3, 1, 0)
+        self.conv3_4 = nn.Conv2d(256 + 256 if skip_connection_3 else 256, 256, 3, 1, 0)
         self.conv3_3 = nn.Conv2d(256, 256, 3, 1, 0)
         self.conv3_2 = nn.Conv2d(256, 256, 3, 1, 0)
         self.conv3_1 = nn.Conv2d(256, 128, 3, 1, 0)
@@ -297,7 +297,7 @@ class Decoder(nn.Module):
         self.skip_connection_3 = skip_connection_3
         self.disable_wavelet = disable_wavelet
 
-    def decode(self, x, skips, level):
+    def decode(self, x, skips, level, adain_feat_3):
         assert level in {4, 3, 2, 1}
         if level == 4:
             out = self.relu(self.conv4_1(self.pad(x)))
@@ -307,6 +307,8 @@ class Decoder(nn.Module):
             else:
                 lh, hl, hh = skips['pool3']
                 out = self.pool3(out, lh, hl, hh)
+            if self.skip_connection_3:
+                out = torch.cat((out, adain_feat_3), dim=1)
             out = self.relu(self.conv3_4(self.pad(out)))
             out = self.relu(self.conv3_3(self.pad(out)))
             return self.relu(self.conv3_2(self.pad(out)))
@@ -336,7 +338,7 @@ class Decoder(nn.Module):
 
     def forward(self, x, skips, adain_feat_3=None):
         for level in [4, 3, 2, 1]:
-            x = self.decode(x, skips, level)
+            x = self.decode(x, skips, level, adain_feat_3)
         return x
 
 """
