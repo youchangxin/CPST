@@ -28,7 +28,7 @@ class CPSTModel(BaseModel):
         parser.add_argument('--lambda_GAN_Adversarial', type=float, default=1.5,
                             help='weight for GAN loss：GAN(G(Ic, Is))')
         parser.add_argument('--lambda_GAN_D', type=float, default=0.2, help='weight for GAN loss：GAN(G(Is, Ic))')
-        parser.add_argument('--lambda_style', type=float, default=0.1, help='weight for global style loss')
+        parser.add_argument('--lambda_style', type=float, default=0.01, help='weight for global style loss')
         parser.add_argument('--lambda_local', type=float, default=0.01, help='weight for local style loss')
         parser.add_argument('--lambda_content', type=float, default=10.0, help='weight for global content loss')
         parser.add_argument('--lambda_GAN_Line', type=float, default=0.0, help='weight for Line loss')
@@ -266,7 +266,7 @@ class CPSTModel(BaseModel):
             for i in range(1, 5):
                 self.loss_content += self.criterionMSE(networks.mean_variance_norm(stylized_feats[i]),
                                                        networks.mean_variance_norm(self.c_feats[i]))
-            self.loss_content = self.opt.lambda_style * self.loss_content
+            self.loss_content = self.opt.lambda_content * self.loss_content
         else:
             self.loss_content = 0
 
