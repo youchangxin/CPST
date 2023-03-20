@@ -302,7 +302,8 @@ class Decoder(nn.Module):
         if level == 4:
             out = self.relu(self.conv4_1(self.pad(x)))
             if self.disable_wavelet:
-                out = self.pool3(out)
+                lh, hl, hh = skips['pool3']
+                out = self.pool3(out + lh + hl + hh)
             else:
                 lh, hl, hh = skips['pool3']
                 out = self.pool3(out, lh, hl, hh)
@@ -313,7 +314,8 @@ class Decoder(nn.Module):
         elif level == 3:
             out = self.relu(self.conv3_1(self.pad(x)))
             if self.disable_wavelet:
-                out = self.pool2(out)
+                lh, hl, hh = skips['pool2']
+                out = self.pool2(out + lh + hl + hh)
             else:
                 lh, hl, hh = skips['pool2']
                 out = self.pool2(out, lh, hl, hh)
@@ -322,7 +324,8 @@ class Decoder(nn.Module):
         elif level == 2:
             out = self.relu(self.conv2_1(self.pad(x)))
             if self.disable_wavelet:
-                out = self.pool1(out)
+                lh, hl, hh = skips['pool1']
+                out = self.pool1(out + lh + hl + hh)
             else:
                 lh, hl, hh = skips['pool1']
                 out = self.pool1(out, lh, hl, hh)
