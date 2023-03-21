@@ -83,7 +83,7 @@ class CPSTModel(BaseModel):
         # define networks
         self.netEnc = cpst_net.Encoder(opt.disable_wavelet)
         self.netTransformer = cpst_net.Transformer(shallow_layer=opt.shallow_layer)
-        self.netDec = cpst_net.Decoder(skip_connection_3=opt.skip_connection_3, disable_wavelet=True)
+        self.netDec = cpst_net.Decoder(skip_connection_3=opt.skip_connection_3, disable_wavelet=opt.disable_wavelet)
         init_net(self.netTransformer, 'normal', 0.02, self.gpu_ids)
         init_net(self.netDec, 'normal', 0.02, self.gpu_ids)
         self.netEnc.to(self.device)
