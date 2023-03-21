@@ -126,7 +126,6 @@ class StyleEncoder(nn.Module):
         return relu_feats, pool_feats
 
 
-
 class Encoder(nn.Module):
     def __init__(self, disable_wavelet):
         super(Encoder, self).__init__()
@@ -294,6 +293,10 @@ class Decoder(nn.Module):
         self.conv1_2 = nn.Conv2d(64, 64, 3, 1, 0)
         self.conv1_1 = nn.Conv2d(64, 3, 3, 1, 0)
 
+        self.wavelet_attn_1 = WaveletAttention(64)
+        self.wavelet_attn_2 = WaveletAttention(128)
+        self.wavelet_attn_3 = WaveletAttention(256)
+
         self.skip_connection_3 = skip_connection_3
         self.disable_wavelet = disable_wavelet
 
@@ -303,7 +306,8 @@ class Decoder(nn.Module):
             out = self.relu(self.conv4_1(self.pad(x)))
             if self.disable_wavelet:
                 lh, hl, hh = skips['pool3']
-                out = self.pool3(out + lh + hl + hh)
+                h_att = self.wavelet_attn_3(lh + hl + hh)
+                out = self.pool3(out + h_att)
             else:
                 lh, hl, hh = skips['pool3']
                 out = self.pool3(out, lh, hl, hh)
@@ -317,7 +321,8 @@ class Decoder(nn.Module):
             out = self.relu(self.conv3_1(self.pad(x)))
             if self.disable_wavelet:
                 lh, hl, hh = skips['pool2']
-                out = self.pool2(out + lh + hl + hh)
+                h_att = self.wavelet_attn_2(lh + hl + hh)
+                out = self.pool2(out + h_att)
             else:
                 lh, hl, hh = skips['pool2']
                 out = self.pool2(out, lh, hl, hh)
@@ -327,7 +332,8 @@ class Decoder(nn.Module):
             out = self.relu(self.conv2_1(self.pad(x)))
             if self.disable_wavelet:
                 lh, hl, hh = skips['pool1']
-                out = self.pool1(out + lh + hl + hh)
+                h_att = self.wavelet_attn_1(lh + hl + hh)
+                out = self.pool1(out + h_att)
             else:
                 lh, hl, hh = skips['pool1']
                 out = self.pool1(out, lh, hl, hh)
@@ -341,99 +347,23 @@ class Decoder(nn.Module):
             x = self.decode(x, skips, level, adain_feat_3)
         return x
 
-"""
-class Decoder(nn.Module):
-    def __init__(self, skip_connection_3=False, disable_wavelet=False):
-        super(Decoder, self).__init__()
-        self.skip_connection_3 = skip_connection_3
-        self.disable_wavelet = disable_wavelet
-        decoder_layer = [
-            nn.ReflectionPad2d((1, 1, 1, 1)),
-            nn.Conv2d(512, 256, (3, 3)),
-            nn.ReLU(),
-            nn.Upsample(scale_factor=2, mode='nearest') if disable_wavelet,
-            nn.ReflectionPad2d((1, 1, 1, 1)),
-            nn.Conv2d(256 + 256 if skip_connection_3 else 256, 256, (3, 3)),
-            nn.ReLU(),
-            nn.ReflectionPad2d((1, 1, 1, 1)),
-            nn.Conv2d(256, 256, (3, 3)),
-            nn.ReLU(),
-            nn.ReflectionPad2d((1, 1, 1, 1)),
-            nn.Conv2d(256, 256, (3, 3)),
-            nn.ReLU(),
-            nn.ReflectionPad2d((1, 1, 1, 1)),
-            nn.Conv2d(256, 128, (3, 3)),
-            nn.ReLU(),  # 128
-            nn.Upsample(scale_factor=2, mode='nearest'),
-            nn.ReflectionPad2d((1, 1, 1, 1)),
-            nn.Conv2d(128, 128, (3, 3)),
-            nn.ReLU(),
-            nn.ReflectionPad2d((1, 1, 1, 1)),
-            nn.Conv2d(128, 64, (3, 3)),
-            nn.ReLU(),  # 64
-            nn.Upsample(scale_factor=2, mode='nearest'),
-            nn.ReflectionPad2d((1, 1, 1, 1)),
-            nn.Conv2d(64, 64, (3, 3)),
-            nn.ReLU(),
-            nn.ReflectionPad2d((1, 1, 1, 1)),
-            nn.Conv2d(64, 3, (3, 3))
-        ]
-        self.dec_1 = nn.Sequential(*decoder_layer[:4])
-        self.dec_2 = nn.Sequential(*decoder_layer[4:10])
-        self.dec_3 = nn.Sequential(*decoder_layer[10:17])
-        self.dec_4 = nn.Sequential(*decoder_layer[17:24])
-        self.dec_5 = nn.Sequential(*decoder_layer[24:])
-        self.decoder_layers = [self.dec_1, self.dec_2, self.dec_3, self.dec_4, self.dec_5]
-
-        self.wavelet_attn_1 = WaveletAttention(64, channel_x2=True)
-        self.wavelet_attn_2 = WaveletAttention(128, channel_x2=True)
-        self.wavelet_attn_3 = WaveletAttention(256, channel_x2=True)
-
-    def forward(self, cs_feat, h_feats, adain_3_feat=None):
-        if self.disable_wavelet:
-            x = cs_feat
-            for i, dec in enumerate(self.decoder_layers):
-                if i == 1 and self.skip_connection_3:
-                    x = dec(torch.cat((x, adain_3_feat), dim=1))
-                else:
-                    x = dec(x)
-            return x
-
-        h_feat_1 = mean_variance_norm(self.wavelet_attn_1(h_feats[0]))
-        h_feat_2 = mean_variance_norm(self.wavelet_attn_2(h_feats[1]))
-        h_feat_3 = mean_variance_norm(self.wavelet_attn_3(h_feats[2]))
-
-        cs = cs_feat + h_feat_3
-        cs = self.dec_1(cs)
-        if self.skip_connection_3:
-            cs = torch.cat((cs, adain_3_feat), dim=1)
-        cs = self.dec_2(cs)
-
-        cs = cs + h_feat_2
-        cs = self.dec_3(cs)
-        cs = cs + h_feat_1
-        cs = self.dec_4(cs)
-        cs = self.dec_5(cs)
-        return cs
-"""
 
 class WaveletAttention(nn.Module):
-    def __init__(self, in_channel, channel_x2=False, reduction=4):
+    def __init__(self, in_planes, reduction=4):
         super(WaveletAttention, self).__init__()
-        out_channel = in_channel * 2 if channel_x2 else in_channel
 
         self.pad = nn.ReflectionPad2d((1, 1, 1, 1))
-        self.conv1 = nn.Conv2d(in_channel, out_channel, kernel_size=3)
-        self.in1 = nn.InstanceNorm2d(out_channel)
+        self.conv1 = nn.Conv2d(in_planes, in_planes, kernel_size=3)
+        self.in1 = nn.InstanceNorm2d(in_planes)
         self.relu = nn.ReLU()
 
         self.avg_pool = nn.AdaptiveAvgPool2d(1)
         self.squeeze = nn.Sequential(
             nn.ReflectionPad2d((1, 1, 1, 1)),
-            nn.Conv2d(out_channel, out_channel // reduction, kernel_size=3),
+            nn.Conv2d(in_planes, in_planes // reduction, kernel_size=3),
             nn.ReLU(inplace=True),
             nn.ReflectionPad2d((1, 1, 1, 1)),
-            nn.Conv2d(out_channel // reduction, out_channel, kernel_size=3),
+            nn.Conv2d(in_planes // reduction, in_planes, kernel_size=3),
         )
         self.sf = nn.Softmax(dim=1)
 
