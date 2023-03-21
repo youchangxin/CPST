@@ -53,17 +53,6 @@ class WavePool(nn.Module):
         return self.LL(x), self.LH(x), self.HL(x), self.HH(x)
 
 
-class WaveUnpool(nn.Module):
-    def __init__(self, in_channels, option_unpool='cat5'):
-        super(WaveUnpool, self).__init__()
-        self.in_channels = in_channels
-        self.option_unpool = option_unpool
-        self.LL, self.LH, self.HL, self.HH = get_wav(self.in_channels, pool=False)
-
-    def forward(self, LL, LH, HL, HH):
-        return self.LL(LL) + self.LH(LH) + self.HL(HL) + self.HH(HH)
-
-
 class ContentEncoder(nn.Module):
     def __init__(self, enc_layers, disable_wavelet):
         super(ContentEncoder, self).__init__()
@@ -279,17 +268,17 @@ class Decoder(nn.Module):
         self.relu = nn.ReLU(inplace=True)
         self.conv4_1 = nn.Conv2d(512, 256, 3, 1, 0)
 
-        self.pool3 = nn.Upsample(scale_factor=2, mode='nearest') if disable_wavelet else WaveUnpool(256)
+        self.pool3 = nn.Upsample(scale_factor=2, mode='nearest')
         self.conv3_4 = nn.Conv2d(256 + 256 if skip_connection_3 else 256, 256, 3, 1, 0)
         self.conv3_3 = nn.Conv2d(256, 256, 3, 1, 0)
         self.conv3_2 = nn.Conv2d(256, 256, 3, 1, 0)
         self.conv3_1 = nn.Conv2d(256, 128, 3, 1, 0)
 
-        self.pool2 = nn.Upsample(scale_factor=2, mode='nearest') if disable_wavelet else WaveUnpool(128)
+        self.pool2 = nn.Upsample(scale_factor=2, mode='nearest')
         self.conv2_2 = nn.Conv2d(128, 128, 3, 1, 0)
         self.conv2_1 = nn.Conv2d(128, 64, 3, 1, 0)
 
-        self.pool1 = nn.Upsample(scale_factor=2, mode='nearest') if disable_wavelet else WaveUnpool(64)
+        self.pool1 = nn.Upsample(scale_factor=2, mode='nearest')
         self.conv1_2 = nn.Conv2d(64, 64, 3, 1, 0)
         self.conv1_1 = nn.Conv2d(64, 3, 3, 1, 0)
 
@@ -305,12 +294,11 @@ class Decoder(nn.Module):
         if level == 4:
             out = self.relu(self.conv4_1(self.pad(x)))
             if self.disable_wavelet:
+                out = self.pool3(out)
+            else:
                 lh, hl, hh = skips['pool3']
                 h_att = self.wavelet_attn_3(lh + hl + hh)
                 out = self.pool3(out + h_att)
-            else:
-                lh, hl, hh = skips['pool3']
-                out = self.pool3(out, lh, hl, hh)
             if self.skip_connection_3:
                 out = torch.cat((out, adain_feat_3), dim=1)
             out = self.relu(self.conv3_4(self.pad(out)))
@@ -320,23 +308,21 @@ class Decoder(nn.Module):
         elif level == 3:
             out = self.relu(self.conv3_1(self.pad(x)))
             if self.disable_wavelet:
+                out = self.pool2(out)
+            else:
                 lh, hl, hh = skips['pool2']
                 h_att = self.wavelet_attn_2(lh + hl + hh)
                 out = self.pool2(out + h_att)
-            else:
-                lh, hl, hh = skips['pool2']
-                out = self.pool2(out, lh, hl, hh)
             return self.relu(self.conv2_2(self.pad(out)))
 
         elif level == 2:
             out = self.relu(self.conv2_1(self.pad(x)))
             if self.disable_wavelet:
+                out = self.pool1(out)
+            else:
                 lh, hl, hh = skips['pool1']
                 h_att = self.wavelet_attn_1(lh + hl + hh)
                 out = self.pool1(out + h_att)
-            else:
-                lh, hl, hh = skips['pool1']
-                out = self.pool1(out, lh, hl, hh)
             return self.relu(self.conv1_2(self.pad(out)))
 
         else:
