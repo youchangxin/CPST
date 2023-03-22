@@ -155,9 +155,10 @@ class CPSTModel(BaseModel):
         self.fake_B = self.netDec(cs_feat, pool_adain_feats, adain_feat_3)
 
         if self.opt.lambda_CYC > 0.0 and self.isTrain:
-            rec_s_feats, rec_c_feats, rec_h_feats = self.netEnc(self.real_B, self.fake_B)
-            rec_cs_feat, rec_adain_feat_3 = self.netTransformer(rec_c_feats, rec_s_feats, rec_h_feats)
-            self.rec_B = self.netDec(rec_cs_feat, rec_adain_feat_3)
+            rec_s_feats, rec_c_feats, rec_h_feats, rec_s_pool_feats = self.netEnc(self.real_B, self.fake_B)
+            rec_cs_feat, rec_adain_feat_3, rec_pool_adain_feats = self.netTransformer(rec_c_feats, rec_s_feats,
+                                                                                      rec_h_feats, rec_s_pool_feats)
+            self.rec_B = self.netDec(rec_cs_feat, rec_pool_adain_feats, rec_adain_feat_3)
 
     def backward_D_basic(self, netD, style, fake):
         """Calculate GAN loss for the discriminator
