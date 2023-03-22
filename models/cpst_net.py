@@ -65,15 +65,20 @@ class ContentEncoder(nn.Module):
     def forward(self, x):
         relu_feats = []
         high_feats = {}
+        max_feats = []
         pool_idxs = [7, 14, 27, 40]
         relu_x_idxs = [3, 10, 17, 30, 43]
         pool_idx = 1
         for idx, layer in enumerate(self.enc_layers):
-            if not self.disable_wavelet and idx in pool_idxs:
-                LL, LH, HL, HH = layer(x)
-                x = LL
-                high_feats["pool"+str(pool_idx)] = (LH, HL, HH)
-                pool_idx += 1
+            if idx in pool_idxs:
+                if self.disable_wavelet:
+                    x = layer(x)
+                    max_feats.append(x)
+                else:
+                    LL, LH, HL, HH = layer(x)
+                    x = LL
+                    high_feats["pool"+str(pool_idx)] = (LH, HL, HH)
+                    pool_idx += 1
             elif idx in relu_x_idxs:
                 x = layer(x)
                 relu_feats.append(x)
@@ -82,7 +87,7 @@ class ContentEncoder(nn.Module):
                 x = layer(x)
 
         if self.disable_wavelet:
-            return relu_feats, None
+            return relu_feats, max_feats
         else:
             return relu_feats, high_feats
 
@@ -238,8 +243,11 @@ class Transformer(nn.Module):
         c_4 = mean_variance_norm(c_feats[3])
         c_5 = mean_variance_norm(c_feats[4])
 
-        if h_feats is not None:
-            pool_adain_feats = {}
+        pool_adain_feats = {}
+        if isinstance(h_feats, list):
+            for i in range(1, 4):
+                pool_adain_feats["pool"+str(i)] = adain_transform(h_feats[i-1], s_pool_feats[i-1])
+        else:
             for i in range(1, 4):
                 pool_adain_feats["pool"+str(i)] = [adain_transform(h_feats["pool"+str(i)][0], s_pool_feats[i-1]),
                                                    adain_transform(h_feats["pool"+str(i)][1], s_pool_feats[i-1]),
@@ -294,7 +302,8 @@ class Decoder(nn.Module):
         if level == 4:
             out = self.relu(self.conv4_1(self.pad(x)))
             if self.disable_wavelet:
-                out = self.pool3(out)
+                h_att = self.wavelet_attn_3(skips['pool3'])
+                out = self.pool3(out + h_att)
             else:
                 lh, hl, hh = skips['pool3']
                 h_att = self.wavelet_attn_3(lh + hl + hh)
@@ -308,7 +317,8 @@ class Decoder(nn.Module):
         elif level == 3:
             out = self.relu(self.conv3_1(self.pad(x)))
             if self.disable_wavelet:
-                out = self.pool2(out)
+                h_att = self.wavelet_attn_2(skips['pool2'])
+                out = self.pool2(out+h_att)
             else:
                 lh, hl, hh = skips['pool2']
                 h_att = self.wavelet_attn_2(lh + hl + hh)
@@ -318,7 +328,8 @@ class Decoder(nn.Module):
         elif level == 2:
             out = self.relu(self.conv2_1(self.pad(x)))
             if self.disable_wavelet:
-                out = self.pool1(out)
+                h_att = self.wavelet_attn_1(skips['pool1'])
+                out = self.pool1(out+h_att)
             else:
                 lh, hl, hh = skips['pool1']
                 h_att = self.wavelet_attn_1(lh + hl + hh)

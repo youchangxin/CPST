@@ -202,7 +202,7 @@ class CPSTModel(BaseModel):
 
         # Line Loss
         if self.opt.lambda_GAN_Line > 0.0:
-            edges = torch.cat([self.real_A, self.fake_B], dim=0)
+            edges = torch.cat([self.real_B, self.fake_B], dim=0)
             self.detection.eval()
             with torch.no_grad():
                 edges = self.detection(edges)
