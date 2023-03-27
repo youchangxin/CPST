@@ -77,7 +77,7 @@ class ContentEncoder(nn.Module):
                 else:
                     LL, LH, HL, HH = layer(x)
                     x = LL
-                    high_feats["pool"+str(pool_idx)] = (LH, HL, HH)
+                    high_feats["pool"+str(pool_idx)] = (LL, LH, HL, HH)
                     pool_idx += 1
             elif idx in relu_x_idxs:
                 x = layer(x)
@@ -233,6 +233,10 @@ class Transformer(nn.Module):
         self.net_adaattn_4 = AdaAttN(in_planes=512, key_planes=512 + 256 + 128 + 64 if shallow_layer else 512)
         self.net_adaattn_5 = AdaAttN(in_planes=512, key_planes=512 + 512 + 256 + 128 + 64 if shallow_layer else 512)
 
+        self.pool_adaattn_1 = AdaAttN(in_planes=64)
+        self.pool_adaattn_2 = AdaAttN(in_planes=128)
+        self.pool_adaattn_3 = AdaAttN(in_planes=256)
+
         self.shallow_layer = shallow_layer
         self.upsample5_1 = nn.Upsample(scale_factor=2, mode='nearest')
         self.merge_conv_pad = nn.ReflectionPad2d((1, 1, 1, 1))
@@ -245,13 +249,23 @@ class Transformer(nn.Module):
 
         pool_adain_feats = {}
         if isinstance(h_feats, list):
-            for i in range(1, 4):
-                pool_adain_feats["pool"+str(i)] = adain_transform(h_feats[i-1], s_pool_feats[i-1])
+            pool_adain_feats["pool1"] = self.pool_adaattn_1(h_feats[0], s_pool_feats[0], h_feats[0], s_pool_feats[0])
+            pool_adain_feats["pool2"] = self.pool_adaattn_2(h_feats[1], s_pool_feats[1], h_feats[1], s_pool_feats[1])
+            pool_adain_feats["pool3"] = self.pool_adaattn_3(h_feats[2], s_pool_feats[2], h_feats[2], s_pool_feats[2])
+
         else:
-            for i in range(1, 4):
-                pool_adain_feats["pool"+str(i)] = [adain_transform(h_feats["pool"+str(i)][0], s_pool_feats[i-1]),
-                                                   adain_transform(h_feats["pool"+str(i)][1], s_pool_feats[i-1]),
-                                                   adain_transform(h_feats["pool"+str(i)][2], s_pool_feats[i-1])]
+            pool_adain_feats["pool1"] = self.pool_adaattn_1(mean_variance_norm(sum(h_feats["pool1"][1:])),
+                                                            s_pool_feats[0],
+                                                            mean_variance_norm(h_feats["pool1"][0]),
+                                                            mean_variance_norm(s_pool_feats[0]))
+            pool_adain_feats["pool2"] = self.pool_adaattn_2(mean_variance_norm(sum(h_feats["pool2"][1:])),
+                                                            s_pool_feats[1],
+                                                            mean_variance_norm(h_feats["pool2"][0]),
+                                                            mean_variance_norm(s_pool_feats[1]))
+            pool_adain_feats["pool3"] = self.pool_adaattn_3(mean_variance_norm(sum(h_feats["pool3"][1:])),
+                                                            s_pool_feats[2],
+                                                            mean_variance_norm(h_feats["pool3"][0]),
+                                                            mean_variance_norm(s_pool_feats[2]))
 
         adain_feat_3 = self.net_adaattn_3(c_3, s_feats[2],
                                           get_key(c_feats, 2, self.shallow_layer),
@@ -302,12 +316,14 @@ class Decoder(nn.Module):
         if level == 4:
             out = self.relu(self.conv4_1(self.pad(x)))
             if self.disable_wavelet:
-                h_att = self.wavelet_attn_3(skips['pool3'])
-                out = self.pool3(out + h_att)
+                #h_att = self.wavelet_attn_3(skips['pool3'])
+                out = out + skips['pool3']
+                out = self.pool3(out)
             else:
-                lh, hl, hh = skips['pool3']
-                h_att = self.wavelet_attn_3(lh + hl + hh)
-                out = self.pool3(out + h_att)
+                #lh, hl, hh = skips['pool3']
+                #h_att = self.wavelet_attn_3(lh + hl + hh)
+                out = out + skips['pool3']
+                out = self.pool3(out )
             if self.skip_connection_3:
                 out = torch.cat((out, adain_feat_3), dim=1)
             out = self.relu(self.conv3_4(self.pad(out)))
@@ -317,23 +333,26 @@ class Decoder(nn.Module):
         elif level == 3:
             out = self.relu(self.conv3_1(self.pad(x)))
             if self.disable_wavelet:
-                h_att = self.wavelet_attn_2(skips['pool2'])
-                out = self.pool2(out+h_att)
+                #h_att = self.wavelet_attn_2(skips['pool2'])
+                out = out + skips['pool2']
+                out = self.pool2(out)
             else:
-                lh, hl, hh = skips['pool2']
-                h_att = self.wavelet_attn_2(lh + hl + hh)
-                out = self.pool2(out + h_att)
+                out = out + skips['pool2']
+                #h_att = self.wavelet_attn_2(lh + hl + hh)
+                out = self.pool2(out)
             return self.relu(self.conv2_2(self.pad(out)))
 
         elif level == 2:
             out = self.relu(self.conv2_1(self.pad(x)))
             if self.disable_wavelet:
-                h_att = self.wavelet_attn_1(skips['pool1'])
-                out = self.pool1(out+h_att)
+                #h_att = self.wavelet_attn_1(skips['pool1'])
+                out = out + skips['pool1']
+                out = self.pool1(out)
             else:
-                lh, hl, hh = skips['pool1']
-                h_att = self.wavelet_attn_1(lh + hl + hh)
-                out = self.pool1(out + h_att)
+                #lh, hl, hh = skips['pool1']
+                #h_att = self.wavelet_attn_1(lh + hl + hh)
+                out = out + skips['pool1']
+                out = self.pool1(out)
             return self.relu(self.conv1_2(self.pad(out)))
 
         else:
