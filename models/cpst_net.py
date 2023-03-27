@@ -316,14 +316,11 @@ class Decoder(nn.Module):
         if level == 4:
             out = self.relu(self.conv4_1(self.pad(x)))
             if self.disable_wavelet:
-                #h_att = self.wavelet_attn_3(skips['pool3'])
-                out = out + skips['pool3']
+                out = out + self.wavelet_attn_3(skips['pool3'])
                 out = self.pool3(out)
             else:
-                #lh, hl, hh = skips['pool3']
-                #h_att = self.wavelet_attn_3(lh + hl + hh)
-                out = out + skips['pool3']
-                out = self.pool3(out )
+                out = out + self.wavelet_attn_3(skips['pool3'])
+                out = self.pool3(out)
             if self.skip_connection_3:
                 out = torch.cat((out, adain_feat_3), dim=1)
             out = self.relu(self.conv3_4(self.pad(out)))
@@ -333,25 +330,20 @@ class Decoder(nn.Module):
         elif level == 3:
             out = self.relu(self.conv3_1(self.pad(x)))
             if self.disable_wavelet:
-                #h_att = self.wavelet_attn_2(skips['pool2'])
-                out = out + skips['pool2']
+                out = out + self.wavelet_attn_2(skips['pool2'])
                 out = self.pool2(out)
             else:
-                out = out + skips['pool2']
-                #h_att = self.wavelet_attn_2(lh + hl + hh)
+                out = out + self.wavelet_attn_2(skips['pool2'])
                 out = self.pool2(out)
             return self.relu(self.conv2_2(self.pad(out)))
 
         elif level == 2:
             out = self.relu(self.conv2_1(self.pad(x)))
             if self.disable_wavelet:
-                #h_att = self.wavelet_attn_1(skips['pool1'])
-                out = out + skips['pool1']
+                out = out + self.wavelet_attn_1(skips['pool1'])
                 out = self.pool1(out)
             else:
-                #lh, hl, hh = skips['pool1']
-                #h_att = self.wavelet_attn_1(lh + hl + hh)
-                out = out + skips['pool1']
+                out = out + self.wavelet_attn_1(skips['pool1'])
                 out = self.pool1(out)
             return self.relu(self.conv1_2(self.pad(out)))
 
